@@ -7,7 +7,6 @@ services:
     numInstances: 1
     autoDeployTrigger: off
     healthCheckPath: /readyz
-    maxShutdownDelaySeconds: 30
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
