@@ -73,9 +73,16 @@ test("distribution skill uses portable paths and documented single-line metadata
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
 });
 
-test("unsubstituted release fails closed and a complete mainnet identity passes", async () => {
-  assert.throws(() => validateReleaseIdentity(RELEASE_IDENTITY_SOURCE), /not configured/);
-  await assert.rejects(run(["self-test"]), /not configured/);
+test("published release pins the verified mainnet identity", async () => {
+  const published = validateReleaseIdentity(RELEASE_IDENTITY_SOURCE);
+  assert.deepEqual(published, {
+    origin: "https://goldkey-edge-storefront.noah-ing.workers.dev",
+    chainId: 8453,
+    contract: "0x220fe98c77ce79baa00d47c5896be05c2a7d3db0",
+    usdc: USDC.toLowerCase(),
+    termsHash: "0xd1fb20b0e28b63e18b660a2710f1b69b356bc87829a01cf5d75e572ae7de3750",
+  });
+  assert.equal((await run(["self-test"])).contract, published.contract);
   const checked = validateReleaseIdentity(RELEASE);
   assert.equal(checked.chainId, 8453);
   assert.equal(checked.usdc, USDC.toLowerCase());

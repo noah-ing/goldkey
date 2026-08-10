@@ -8,14 +8,13 @@ const MAINNET_CHAIN_ID = 8453;
 const BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const MAX_SIGNATURE_CHARS = 32 * 1024;
 
-// Release automation must replace every template value before publication.
-// The mainnet contract remains intentionally unknown until its verified deployment.
+// Frozen, source-verified Base mainnet release identity.
 export const RELEASE_IDENTITY_SOURCE = Object.freeze({
-  origin: "{{GOLDKEY_PUBLIC_ORIGIN}}",
+  origin: "https://goldkey-edge-storefront.noah-ing.workers.dev",
   chainId: MAINNET_CHAIN_ID,
-  contract: "{{GOLDKEY_MAINNET_CONTRACT}}",
+  contract: "0x220FE98C77CE79baa00d47C5896BE05C2A7D3db0",
   usdc: BASE_MAINNET_USDC,
-  termsHash: "{{GOLDKEY_TERMS_HASH}}",
+  termsHash: "0xd1fb20b0e28b63e18b660a2710f1b69b356bc87829a01cf5d75e572ae7de3750",
 });
 
 function fail(message) {

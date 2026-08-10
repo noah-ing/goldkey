@@ -118,10 +118,9 @@ Do not proceed if any acceptance check fails.
 
 ## 5. Publish where agents already search
 
-Replace `{{GOLDKEY_PUBLIC_ORIGIN}}`, `{{GOLDKEY_MAINNET_CONTRACT}}`, and
-`{{GOLDKEY_TERMS_HASH}}` in the bundled client with the accepted mainnet release
-identity. The client must contain no `{{GOLDKEY_...}}` values and its `self-test`
-must pass before a ClawHub dry run or update is published:
+The bundled client pins the accepted mainnet release identity. Confirm it
+contains no `{{GOLDKEY_...}}` values and its `self-test` passes before a ClawHub
+dry run or update is published:
 
 ```sh
 npm install --global clawhub

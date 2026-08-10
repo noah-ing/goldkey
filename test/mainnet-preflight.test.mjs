@@ -10,6 +10,7 @@ import {
 } from "../scripts/mainnet-preflight-data.mjs";
 
 const scriptPath = new URL("../scripts/mainnet-preflight.zsh", import.meta.url);
+const confirmationScriptPath = new URL("../scripts/mainnet-confirm-and-verify.zsh", import.meta.url);
 const artifactPath = new URL("../contracts/out/GoldKey.sol/GoldKey.json", import.meta.url);
 
 test("mainnet release input freezes the intended constructor and compiler settings", () => {
@@ -105,5 +106,20 @@ test("operator command is syntactically valid and has no signing or publishing p
   assert.doesNotMatch(
     source,
     /--broadcast|--private-key|--keystore|--account|--mnemonic|--interactive|cast\s+send|cast\s+publish|eth_sendTransaction|eth_sendRawTransaction/,
+  );
+});
+
+test("mainnet confirmation is read-only except for source publication", () => {
+  execFileSync("/bin/zsh", ["-n", confirmationScriptPath.pathname]);
+  const source = readFileSync(confirmationScriptPath, "utf8");
+
+  assert.match(source, /0x94b0dd9f5bbb93216aea85e1384c5592372e3dcf1ab5da04e51c5f48c6e022c6/);
+  assert.match(source, /0x220FE98C77CE79baa00d47C5896BE05C2A7D3db0/);
+  assert.match(source, /0x1ac4675966261ebcbc30b6be393f97142756a15c48c303f82e9af27149ea1d0c/);
+  assert.match(source, /verify-contract/);
+  assert.match(source, /base\.blockscout\.com\/api\//);
+  assert.doesNotMatch(
+    source,
+    /--broadcast|--private-key|--keystore|--account|--mnemonic|cast\s+send|cast\s+publish|forge\s+create|eth_sendTransaction|eth_sendRawTransaction/,
   );
 });
