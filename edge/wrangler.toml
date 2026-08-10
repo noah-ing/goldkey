@@ -4,6 +4,15 @@ compatibility_date = "2026-08-10"
 workers_dev = true
 keep_vars = true
 
+[vars]
+PUBLIC_ORIGIN = "https://goldkey-edge-sepolia.noah-ing.workers.dev"
+ORIGIN_API = "https://goldkey-api-free.onrender.com"
+CHAIN_ID = "84532"
+GOLDKEY_CONTRACT = "0x220FE98C77CE79baa00d47C5896BE05C2A7D3db0"
+USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+TREASURY_ADDRESS = "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b"
+TERMS_HASH = "0xd1fb20b0e28b63e18b660a2710f1b69b356bc87829a01cf5d75e572ae7de3750"
+
 [assets]
 directory = "./public/"
 binding = "ASSETS"
