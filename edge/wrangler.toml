@@ -1,4 +1,4 @@
-name = "goldkey-edge-storefront"
+name = "goldkey-edge-sepolia"
 main = "src/index.mjs"
 compatibility_date = "2026-08-10"
 workers_dev = true
