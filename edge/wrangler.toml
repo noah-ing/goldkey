@@ -17,3 +17,14 @@ TERMS_HASH = "0xd1fb20b0e28b63e18b660a2710f1b69b356bc87829a01cf5d75e572ae7de3750
 directory = "./public/"
 binding = "ASSETS"
 run_worker_first = true
+
+# Static-first permanent mainnet Worker. Deploy this environment before the
+# mainnet contract so its immutable metadata and terms URLs already exist.
+# Commerce and origin proxying remain fail-closed until the mainnet contract
+# and production Render configuration have been verified.
+[env.mainnet]
+name = "goldkey-edge-storefront"
+workers_dev = true
+
+[env.mainnet.vars]
+PUBLIC_ORIGIN = "https://goldkey-edge-storefront.noah-ing.workers.dev"
