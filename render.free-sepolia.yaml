@@ -18,17 +18,17 @@ services:
       - key: DATABASE_POOL_MAX
         value: "5"
       - key: PUBLIC_ORIGIN
-        sync: false
+        value: "https://goldkey-edge-sepolia.noah-ing.workers.dev"
       - key: CHAIN_ID
         value: "84532"
       - key: RPC_URL
         sync: false
       - key: GOLDKEY_CONTRACT
-        sync: false
+        value: "0x220FE98C77CE79baa00d47C5896BE05C2A7D3db0"
       - key: USDC_ADDRESS
         value: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
       - key: TREASURY_ADDRESS
-        sync: false
+        value: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b"
       - key: X402_ENABLED
         value: "true"
       - key: X402_FACILITATOR_URL

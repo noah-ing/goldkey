@@ -24,6 +24,22 @@ Verified network values as of 2026-08-10:
 
 Reconfirm the USDC addresses against Circle before each deployment. Base's public RPC endpoints are rate-limited and are not intended for production traffic.
 
+### Verified Base Sepolia release candidate
+
+The current testnet release was deployed and source-verified on 2026-08-10:
+
+| Field | Value |
+|---|---|
+| Contract | `0x220FE98C77CE79baa00d47C5896BE05C2A7D3db0` |
+| Creation transaction | `0x8e301c6e89df276c69bf24c506b0e253033c53b61def7d4436302fab19a5f156` |
+| Deployer / owner / treasury | `0xd6b7E00FcD46966676F554fE0455BfF739e85b1b` |
+| Terms hash | `0xd1fb20b0e28b63e18b660a2710f1b69b356bc87829a01cf5d75e572ae7de3750` |
+| Metadata origin | `https://goldkey-edge-sepolia.noah-ing.workers.dev` |
+
+Run `./scripts/sepolia-confirm-and-verify.zsh` from the repository root to
+recheck bytecode, immutable identity, commercial constants, and source
+verification using Base's public Sepolia RPC.
+
 ## 1. Verify the build
 
 From this directory:
@@ -80,17 +96,17 @@ GOLDKEY_TERMS_HASH="$(node ../scripts/terms-hash.mjs)"
 forge create src/GoldKey.sol:GoldKey \
   --rpc-url "$GOLDKEY_RPC_URL" \
   --account "$GOLDKEY_DEPLOYER_ACCOUNT" \
+  --broadcast \
+  --verify \
+  --verifier blockscout \
+  --verifier-url https://base-sepolia.blockscout.com/api/ \
   --constructor-args \
     "$GOLDKEY_OWNER" \
     "$GOLDKEY_USDC" \
     "$GOLDKEY_TREASURY" \
     "$GOLDKEY_METADATA_BASE_URI" \
     "$GOLDKEY_TERMS_URI" \
-    "$GOLDKEY_TERMS_HASH" \
-  --broadcast \
-  --verify \
-  --verifier blockscout \
-  --verifier-url https://base-sepolia.blockscout.com/api/
+    "$GOLDKEY_TERMS_HASH"
 ```
 
 Use separate multisig addresses for `GOLDKEY_OWNER` and `GOLDKEY_TREASURY` when
