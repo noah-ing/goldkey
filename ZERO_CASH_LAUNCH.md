@@ -6,7 +6,7 @@ This is the honest `$0` route: prove GoldKey on Base Sepolia, run the pre-revenu
 
 The route is conditional, not guaranteed.
 
-- GoldKey now includes the Postgres adapter, migrations, pooled `DATABASE_URL` selection, and an opt-in live contention test. The adapter has not yet been validated against an actual Neon branch in this workspace. **Live Neon contention, idempotency, quota, migration, disconnect/reconnect, and service-restart validation remain mandatory before any mainnet sale.**
+- GoldKey's Postgres adapter, migrations, pooled `DATABASE_URL` selection, idempotency, quota, and row-locking behavior have passed the opt-in live contention test against the launch Neon branch. **Disconnect/reconnect and Render cold-restart persistence validation remain mandatory before any mainnet sale.**
 - Free Render services spin down after 15 idle minutes, can take about a minute to wake, and can restart. Neon Free also scales compute to zero after five idle minutes. Expect cold starts and disclose them. Free infrastructure is a bootstrap, not an uptime claim.
 - The Base-documented mainnet faucet is a third-party service, provides only a small one-time amount, and may be unavailable, ineligible, or insufficient for this contract's deployment. Simulate the exact deployment first.
 - CDP Paymaster is not automatically free. It is billed unless credits have actually been awarded. A sponsored CREATE2 deployment is an alternative to test, not a promise.
@@ -53,7 +53,7 @@ Render explicitly says free filesystems are ephemeral, persistent disks require 
 Base's official faucet directory lists `ethfaucet.com`, operated by BringID, as providing a small one-time Base mainnet ETH claim for contract deployment. It is Base-documented, **not operated or guaranteed by Base**. [Base faucet directory](https://docs.base.org/base-chain/network-information/network-faucets).
 
 1. Freeze bytecode, constructor arguments, owner, treasury, metadata URL, terms URL, and terms hash.
-2. Simulate the exact deployment on Base mainnet and calculate execution plus L1 data fees with a safety margin.
+2. Run `./scripts/mainnet-preflight.zsh` with the dedicated Alchemy Base-mainnet RPC. It verifies the permanent storefront, freezes the exact creation input, and calculates execution plus L1 data fees with safety margins without loading a signer or broadcasting.
 3. Claim to the dedicated deployer only after the build is final; the mainnet claim is one-time.
 4. Proceed only if the confirmed deployer balance covers the simulation and margin. Preserve any remainder for verification or `withdrawProceeds()`.
 5. Use Circle's Base USDC address `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` and reverify it from Circle immediately before deployment.

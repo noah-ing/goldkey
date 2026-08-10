@@ -1,25 +1,111 @@
 #!/usr/bin/env node
 
-const RELEASE_BASE_URL = "{{GOLDKEY_PUBLIC_ORIGIN}}";
+import { open, unlink } from "node:fs/promises";
+import { isAbsolute } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const MAINNET_CHAIN_ID = 8453;
+const BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const MAX_SIGNATURE_CHARS = 32 * 1024;
+
+// Release automation must replace every template value before publication.
+// The mainnet contract remains intentionally unknown until its verified deployment.
+export const RELEASE_IDENTITY_SOURCE = Object.freeze({
+  origin: "{{GOLDKEY_PUBLIC_ORIGIN}}",
+  chainId: MAINNET_CHAIN_ID,
+  contract: "{{GOLDKEY_MAINNET_CONTRACT}}",
+  usdc: BASE_MAINNET_USDC,
+  termsHash: "{{GOLDKEY_TERMS_HASH}}",
+});
 
 function fail(message) {
   throw new Error(message);
 }
 
-export function normalizeBaseUrl(value) {
-  if (typeof value !== "string" || value.includes("{{")) {
-    fail("GoldKey public origin is not configured; set GOLDKEY_API_URL to the live HTTPS Worker URL");
+function isPlaceholder(value) {
+  return typeof value === "string" && value.includes("{{");
+}
+
+export function normalizeBaseUrl(value, name = "GoldKey origin") {
+  if (typeof value !== "string" || value.length === 0 || isPlaceholder(value)) {
+    fail(`${name} is not configured; release template values must be replaced before publication`);
   }
-  const url = new URL(value);
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail(`${name} must be an absolute URL`);
+  }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-    fail("GOLDKEY_API_URL must be a credential-free HTTPS origin");
+    fail(`${name} must be a credential-free HTTPS origin`);
   }
-  if (url.pathname !== "/") fail("GOLDKEY_API_URL must not contain a path");
+  if (url.pathname !== "/") fail(`${name} must not contain a path`);
   return url.origin;
 }
 
-function baseUrl() {
-  return normalizeBaseUrl(process.env.GOLDKEY_API_URL || RELEASE_BASE_URL);
+function normalizeAddress(value, name) {
+  if (typeof value !== "string" || isPlaceholder(value)) {
+    fail(`${name} is not configured; release template values must be replaced before publication`);
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value) || /^0x0{40}$/i.test(value)) {
+    fail(`${name} must be a nonzero EVM address`);
+  }
+  return value.toLowerCase();
+}
+
+function normalizeTermsHash(value) {
+  if (typeof value !== "string" || isPlaceholder(value)) {
+    fail("GoldKey terms hash is not configured; release template values must be replaced before publication");
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(value) || /^0x0{64}$/i.test(value)) {
+    fail("GoldKey terms hash must be a nonzero bytes32 value");
+  }
+  return value.toLowerCase();
+}
+
+export function validateReleaseIdentity(source = RELEASE_IDENTITY_SOURCE) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) fail("GoldKey release identity must be an object");
+  if (source.chainId !== MAINNET_CHAIN_ID) fail(`GoldKey release chain must be Base mainnet ${MAINNET_CHAIN_ID}`);
+  const usdc = normalizeAddress(source.usdc, "GoldKey USDC address");
+  if (usdc !== BASE_MAINNET_USDC.toLowerCase()) fail("GoldKey release USDC address must be the canonical Base mainnet USDC contract");
+  return Object.freeze({
+    origin: normalizeBaseUrl(source.origin, "GoldKey release origin"),
+    chainId: MAINNET_CHAIN_ID,
+    contract: normalizeAddress(source.contract, "GoldKey mainnet contract"),
+    usdc,
+    termsHash: normalizeTermsHash(source.termsHash),
+  });
+}
+
+export function resolveRuntimeConfig({ env = process.env, releaseIdentitySource = RELEASE_IDENTITY_SOURCE } = {}) {
+  const allowDev = env.GOLDKEY_ALLOW_DEV_ORIGIN;
+  const devOrigin = env.GOLDKEY_DEV_API_URL;
+  if (allowDev !== undefined && allowDev !== "" && allowDev !== "1") {
+    fail("GOLDKEY_ALLOW_DEV_ORIGIN must be exactly 1 when development routing is intended");
+  }
+  if (devOrigin && allowDev !== "1") {
+    fail("GOLDKEY_DEV_API_URL is ignored unless GOLDKEY_ALLOW_DEV_ORIGIN=1");
+  }
+  if (allowDev === "1") {
+    if (!devOrigin) fail("GOLDKEY_DEV_API_URL is required when GOLDKEY_ALLOW_DEV_ORIGIN=1");
+    const origin = normalizeBaseUrl(devOrigin, "GoldKey development origin");
+    let releaseIdentity;
+    try {
+      releaseIdentity = validateReleaseIdentity(releaseIdentitySource);
+    } catch {
+      releaseIdentity = null;
+    }
+    const canonical = releaseIdentity !== null && origin === releaseIdentity.origin;
+    return Object.freeze({
+      origin,
+      mode: "development",
+      canonical,
+      identity: canonical ? releaseIdentity : null,
+    });
+  }
+
+  const identity = validateReleaseIdentity(releaseIdentitySource);
+  return Object.freeze({ origin: identity.origin, mode: "production", canonical: true, identity });
 }
 
 function parseFlags(argv) {
@@ -66,8 +152,89 @@ function jsonFlag(flags, name) {
   }
 }
 
-async function request(path, { method = "GET", body, token, headers = {} } = {}) {
-  const response = await fetch(`${baseUrl()}${path}`, {
+function identityMismatch(field) {
+  fail(`GoldKey identity mismatch: ${field}`);
+}
+
+function expectExact(actual, expected, field) {
+  if (actual !== expected) identityMismatch(field);
+}
+
+function expectAddress(actual, expected, field) {
+  if (typeof actual !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(actual) || actual.toLowerCase() !== expected) {
+    identityMismatch(field);
+  }
+}
+
+function expectTermsHash(actual, expected, field) {
+  if (typeof actual !== "string" || actual.toLowerCase() !== expected) identityMismatch(field);
+}
+
+function expectCanonicalUrl(actual, identity, field) {
+  let parsed;
+  try {
+    parsed = new URL(actual);
+  } catch {
+    identityMismatch(field);
+  }
+  if (parsed.origin !== identity.origin || parsed.protocol !== "https:") identityMismatch(field);
+}
+
+function validateTransactionTargets(payload, identity) {
+  if (!Array.isArray(payload.unsigned_transactions)) identityMismatch("unsigned_transactions");
+  for (const transaction of payload.unsigned_transactions) {
+    if (!transaction || typeof transaction !== "object" || Array.isArray(transaction)) identityMismatch("unsigned_transactions item");
+    const target = typeof transaction.to === "string" ? transaction.to.toLowerCase() : "";
+    if (target !== identity.usdc && target !== identity.contract) identityMismatch("unsigned transaction target");
+    if (transaction.value !== "0") identityMismatch("unsigned transaction native value");
+  }
+}
+
+export function validateIdentityPayload(kind, payload, identity) {
+  if (!identity) return payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) identityMismatch(`${kind} payload`);
+
+  if (kind === "offer") {
+    expectExact(payload.schema, "goldkey.offer.v1", "offer schema");
+    expectExact(payload.price?.chain_id, identity.chainId, "offer chain_id");
+    expectAddress(payload.price?.token_address, identity.usdc, "offer USDC address");
+    expectAddress(payload.contract?.address, identity.contract, "offer contract address");
+    expectTermsHash(payload.contract?.terms_hash, identity.termsHash, "offer terms hash");
+    expectCanonicalUrl(payload.contract?.terms_uri, identity, "offer terms URI");
+    expectCanonicalUrl(payload.alternative?.endpoint, identity, "offer paygo endpoint");
+    for (const [name, value] of Object.entries(payload.discovery ?? {})) expectCanonicalUrl(value, identity, `offer discovery ${name}`);
+    return payload;
+  }
+
+  if (kind === "commerce") {
+    expectExact(payload.schema, "goldkey.commerce-response.v1", "commerce schema");
+    expectExact(payload.chain_id, identity.chainId, "commerce chain_id");
+    expectAddress(payload.contract, identity.contract, "commerce contract address");
+    expectAddress(payload.payment_token, identity.usdc, "commerce USDC address");
+    expectTermsHash(payload.terms_hash, identity.termsHash, "commerce terms hash");
+    expectCanonicalUrl(payload.terms_uri, identity, "commerce terms URI");
+    expectCanonicalUrl(payload.response_schema_url, identity, "commerce response schema URL");
+    validateTransactionTargets(payload, identity);
+    return payload;
+  }
+
+  if (kind === "renewal") {
+    expectExact(payload.schema, "goldkey.renewal-response.v1", "renewal schema");
+    expectExact(payload.chain_id, identity.chainId, "renewal chain_id");
+    expectAddress(payload.contract, identity.contract, "renewal contract address");
+    expectCanonicalUrl(payload.terms_uri, identity, "renewal terms URI");
+    validateTransactionTargets(payload, identity);
+    return payload;
+  }
+
+  fail(`Unknown identity payload kind: ${kind}`);
+}
+
+async function request(path, { method = "GET", body, token, headers = {}, validateAs } = {}, context) {
+  if (token && !context.runtime.canonical) {
+    fail("Refusing to send GOLDKEY_ACCESS_TOKEN to a noncanonical development origin");
+  }
+  const response = await context.fetchImpl(`${context.runtime.origin}${path}`, {
     method,
     redirect: "error",
     headers: {
@@ -90,11 +257,11 @@ async function request(path, { method = "GET", body, token, headers = {} } = {})
     const message = payload?.error?.message || `HTTP ${response.status}`;
     fail(`${code}: ${message}`);
   }
-  return payload;
+  return validateAs ? validateIdentityPayload(validateAs, payload, context.runtime.identity) : payload;
 }
 
-async function paymentProbe(tool, input) {
-  const response = await fetch(`${baseUrl()}/v1/paygo/execute`, {
+async function paymentProbe(tool, input, context) {
+  const response = await context.fetchImpl(`${context.runtime.origin}/v1/paygo/execute`, {
     method: "POST",
     redirect: "error",
     headers: { accept: "application/json", "content-type": "application/json" },
@@ -118,9 +285,29 @@ async function paymentProbe(tool, input) {
   return { http_status: 402, payment_required: paymentRequired, body };
 }
 
-function accessToken() {
-  const value = process.env.GOLDKEY_ACCESS_TOKEN;
+function accessToken(env) {
+  const value = env.GOLDKEY_ACCESS_TOKEN;
   if (!value) fail("Set GOLDKEY_ACCESS_TOKEN through the agent secret store for this authenticated command");
+  return value;
+}
+
+async function readSignatureFromStdin(stream = process.stdin) {
+  if (stream.isTTY) fail("Inject GOLDKEY_WALLET_SIGNATURE through the secret store or provide the signature on standard input");
+  let value = "";
+  for await (const chunk of stream) {
+    value += chunk.toString("utf8");
+    if (value.length > MAX_SIGNATURE_CHARS) fail("Wallet signature input is too large");
+  }
+  return value;
+}
+
+async function walletSignature(flags, env, readStdinImpl) {
+  if (flags.has("signature")) fail("--signature is disabled because command arguments are logged; use GOLDKEY_WALLET_SIGNATURE or standard input");
+  const raw = env.GOLDKEY_WALLET_SIGNATURE || await readStdinImpl();
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (value.length > MAX_SIGNATURE_CHARS || !/^0x(?:[0-9a-fA-F]{2})+$/.test(value)) {
+    fail("Wallet signature must be nonempty 0x-prefixed bytes");
+  }
   return value;
 }
 
@@ -146,27 +333,52 @@ Commands:
   quote --forecast N [--wallet 0x...] [--budget 50.00] [--switching-cost 0.00] [--risk-reserve 0.00] [--authorized]
   renew --token-id N --forecast N [--wallet 0x...] [--switching-cost 0.00] [--risk-reserve 0.00] [--authorized]
   challenge --token-id N --wallet 0x...
-  verify --challenge-id UUID --signature 0x...
+  verify --challenge-id UUID --secret-output /absolute/private/file
   quota
   tool --name TOOL --idempotency KEY --input JSON_OBJECT
   keys-list
-  key-issue --body JSON_OBJECT
+  key-issue --secret-output /absolute/private/file --body JSON_OBJECT
   key-revoke --id KEY_ID
   keys-revoke-all
   paygo-probe --name TOOL --input JSON_OBJECT
   self-test
 
-Set GOLDKEY_API_URL to the live HTTPS Worker URL until the release URL is embedded.
+The published release embeds and validates its canonical Base mainnet origin and identity.
+For verify, inject GOLDKEY_WALLET_SIGNATURE temporarily or provide the signature on stdin.
 Inject authenticated credentials through GOLDKEY_ACCESS_TOKEN; never pass them as arguments.`;
 
-export async function run(argv) {
+export async function run(argv, options = {}) {
   const [command, ...rest] = argv;
   const flags = parseFlags(rest);
-  if (command === "offer") return request("/.well-known/goldkey.json");
-  if (command === "catalog") return request("/v1/catalog");
-  if (command === "demo") return request("/v1/demo");
-  if (command === "openapi") return request("/openapi.json");
-  if (command === "quote") return request("/v1/commerce/respond", { method: "POST", body: quoteBody(flags) });
+  if (!command || command === "help" || command === "--help") return { help };
+
+  const releaseIdentitySource = options.releaseIdentitySource ?? RELEASE_IDENTITY_SOURCE;
+  if (command === "self-test") {
+    const identity = validateReleaseIdentity(releaseIdentitySource);
+    const sample = quoteBody(new Map([["forecast", "7200"], ["budget", "50.00"]]));
+    if (sample.forecast_calls !== 7200 || sample.purchase_authority !== false) fail("quote construction failed");
+    return {
+      ok: true,
+      origin: identity.origin,
+      chain_id: identity.chainId,
+      contract: identity.contract,
+      usdc: identity.usdc,
+      terms_hash: identity.termsHash,
+    };
+  }
+
+  const env = options.env ?? process.env;
+  const runtime = resolveRuntimeConfig({ env, releaseIdentitySource });
+  const context = { runtime, fetchImpl: options.fetchImpl ?? fetch };
+  const readStdinImpl = options.readStdinImpl ?? (() => readSignatureFromStdin());
+
+  if (command === "offer") return request("/.well-known/goldkey.json", { validateAs: "offer" }, context);
+  if (command === "catalog") return request("/v1/catalog", {}, context);
+  if (command === "demo") return request("/v1/demo", {}, context);
+  if (command === "openapi") return request("/openapi.json", {}, context);
+  if (command === "quote") {
+    return request("/v1/commerce/respond", { method: "POST", body: quoteBody(flags), validateAs: "commerce" }, context);
+  }
   if (command === "renew") {
     const body = {
       token_id: required(flags, "token-id"),
@@ -176,53 +388,93 @@ export async function run(argv) {
       purchase_authority: flags.get("authorized") === true,
     };
     if (flags.has("wallet")) body.wallet = flags.get("wallet");
-    return request("/v1/renewal/quote", {
-      method: "POST",
-      body,
-    });
+    return request("/v1/renewal/quote", { method: "POST", body, validateAs: "renewal" }, context);
   }
   if (command === "challenge") {
     return request("/v1/auth/challenge", {
       method: "POST",
       body: { token_id: required(flags, "token-id"), wallet: required(flags, "wallet") },
-    });
+    }, context);
   }
   if (command === "verify") {
     return request("/v1/auth/verify", {
       method: "POST",
-      body: { challenge_id: required(flags, "challenge-id"), signature: required(flags, "signature") },
-    });
+      body: { challenge_id: required(flags, "challenge-id"), signature: await walletSignature(flags, env, readStdinImpl) },
+    }, context);
   }
-  if (command === "quota") return request("/v1/quota", { token: accessToken() });
+  if (command === "quota") return request("/v1/quota", { token: accessToken(env) }, context);
   if (command === "tool") {
     return request(`/v1/tools/${encodeURIComponent(required(flags, "name"))}`, {
       method: "POST",
-      token: accessToken(),
+      token: accessToken(env),
       headers: { "idempotency-key": required(flags, "idempotency") },
       body: jsonFlag(flags, "input"),
-    });
+    }, context);
   }
-  if (command === "keys-list") return request("/v1/keys", { token: accessToken() });
+  if (command === "keys-list") return request("/v1/keys", { token: accessToken(env) }, context);
   if (command === "key-issue") {
-    return request("/v1/keys", { method: "POST", token: accessToken(), body: jsonFlag(flags, "body") });
+    return request("/v1/keys", { method: "POST", token: accessToken(env), body: jsonFlag(flags, "body") }, context);
   }
   if (command === "key-revoke") {
-    return request(`/v1/keys/${encodeURIComponent(required(flags, "id"))}`, { method: "DELETE", token: accessToken() });
+    return request(`/v1/keys/${encodeURIComponent(required(flags, "id"))}`, { method: "DELETE", token: accessToken(env) }, context);
   }
-  if (command === "keys-revoke-all") return request("/v1/keys", { method: "DELETE", token: accessToken() });
-  if (command === "paygo-probe") return paymentProbe(required(flags, "name"), jsonFlag(flags, "input"));
-  if (command === "self-test") {
-    if (normalizeBaseUrl("https://goldkey.example") !== "https://goldkey.example") fail("origin normalization failed");
-    const sample = quoteBody(new Map([["forecast", "7200"], ["budget", "50.00"]]));
-    if (sample.forecast_calls !== 7200 || sample.purchase_authority !== false) fail("quote construction failed");
-    return { ok: true };
-  }
-  if (!command || command === "help" || command === "--help") return { help };
+  if (command === "keys-revoke-all") return request("/v1/keys", { method: "DELETE", token: accessToken(env) }, context);
+  if (command === "paygo-probe") return paymentProbe(required(flags, "name"), jsonFlag(flags, "input"), context);
   fail(`Unknown command: ${command}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  run(process.argv.slice(2))
+function secretField(command) {
+  if (command === "verify") return "access_token";
+  if (command === "key-issue") return "access_key";
+  return null;
+}
+
+export async function runCli(argv, options = {}) {
+  const command = argv[0];
+  const field = secretField(command);
+  if (!field) {
+    if (argv.includes("--secret-output")) fail("--secret-output is valid only for verify and key-issue");
+    return run(argv, options);
+  }
+
+  const flags = parseFlags(argv.slice(1));
+  const outputPath = required(flags, "secret-output");
+  if (!isAbsolute(outputPath)) fail("--secret-output must be an absolute path");
+  const openSecretFileImpl = options.openSecretFileImpl ?? ((filePath) => open(filePath, "wx", 0o600));
+  const removeSecretFileImpl = options.removeSecretFileImpl ?? ((filePath) => unlink(filePath));
+  let handle;
+  let created = false;
+  try {
+    handle = await openSecretFileImpl(outputPath);
+    created = true;
+    const result = await run(argv, options);
+    const credential = result?.[field];
+    if (typeof credential !== "string" || credential.length === 0) fail(`GoldKey response omitted ${field}`);
+    await handle.writeFile(`${JSON.stringify({ [field]: credential })}\n`, { encoding: "utf8" });
+    await handle.close();
+    handle = null;
+    return { ...result, [field]: "[REDACTED]", secret_output_written: true };
+  } catch (error) {
+    if (handle) {
+      try {
+        await handle.close();
+      } catch {
+        // Preserve the original error.
+      }
+    }
+    if (created) {
+      try {
+        await removeSecretFileImpl(outputPath);
+      } catch {
+        // The path was created by this process; cleanup failure must not mask the request error.
+      }
+    }
+    throw error;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runCli(process.argv.slice(2))
     .then((result) => {
       if (result?.help) process.stdout.write(`${result.help}\n`);
       else process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

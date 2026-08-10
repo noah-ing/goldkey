@@ -52,8 +52,8 @@ database URL, RPC URL, or CDP secret into chat or source control.
 - Keep both `workers.dev` URLs permanently; never rename or delete them after the
   corresponding contract deployment.
 - Build command: `npm test`.
-- Deploy command: `npx wrangler deploy` for mainnet. Use an explicit Sepolia
-  environment or `--name goldkey-edge-sepolia` for the test Worker.
+- Deploy command: `npx wrangler deploy --env mainnet` for mainnet. The Sepolia
+  Worker uses the top-level configuration with `npx wrangler deploy`.
 
 The first deployment may have no commerce variables. `/healthz`, `/terms`,
 `/v1/demo`, `/v1/catalog`, and `/openapi.json` must still respond. Put the final
@@ -96,7 +96,9 @@ Do not proceed if any acceptance check fails.
 ## 4. Mainnet deployment with no operator cash
 
 1. Freeze bytes and URLs. No changes after this point without re-simulation.
-2. Simulate the exact deployment on Base and record execution plus L1 data cost.
+2. Run `./scripts/mainnet-preflight.zsh`. It verifies the permanent storefront,
+   freezes the exact creation input, estimates execution plus L1 data cost, and
+   prints `FUNDED` or the exact `SHORT` amount without loading a signer.
 3. Only then claim the one-time Base mainnet amount from `ethfaucet.com` to the
    dedicated wallet.
 4. Deploy only if the confirmed balance covers simulation plus margin. Otherwise
@@ -116,9 +118,10 @@ Do not proceed if any acceptance check fails.
 
 ## 5. Publish where agents already search
 
-Replace `{{GOLDKEY_PUBLIC_ORIGIN}}` in the bundled client with the live mainnet
-Worker URL. Remove the now-unnecessary required URL override from its OpenClaw
-metadata. Run its self-test and a ClawHub dry run, then publish:
+Replace `{{GOLDKEY_PUBLIC_ORIGIN}}`, `{{GOLDKEY_MAINNET_CONTRACT}}`, and
+`{{GOLDKEY_TERMS_HASH}}` in the bundled client with the accepted mainnet release
+identity. The client must contain no `{{GOLDKEY_...}}` values and its `self-test`
+must pass before a ClawHub dry run or update is published:
 
 ```sh
 npm install --global clawhub

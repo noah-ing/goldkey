@@ -144,8 +144,10 @@ Each input line is a quote request; each output line is a strict JSON commerce r
 
 `distribution/goldkey-agent-utilities/` is a ClawHub-ready OpenClaw skill with a
 no-dependency Node client for discovery, live quotes, authentication, quota, and
-pass-gated tool calls. Before publishing, replace `{{GOLDKEY_PUBLIC_ORIGIN}}` in
-its client with the permanent mainnet Worker URL and run its `self-test`.
+pass-gated tool calls. Before publishing, replace `{{GOLDKEY_PUBLIC_ORIGIN}}`,
+`{{GOLDKEY_MAINNET_CONTRACT}}`, and `{{GOLDKEY_TERMS_HASH}}` in its client with
+the accepted mainnet identity, confirm no release placeholders remain, and run
+its `self-test`.
 
 Publish the free integration under the `integrations`, `security`, and `finance`
 categories. The external service remains paid at the posted prices; ClawHub is
