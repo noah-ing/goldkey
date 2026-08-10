@@ -1,0 +1,4 @@
+interface:
+  display_name: "GoldKey Agent Utilities"
+  short_description: "Evaluate and use GoldKey deterministic APIs"
+  default_prompt: "Use $goldkey-agent-utilities to compare GoldKey pass economics and call an appropriate deterministic utility."

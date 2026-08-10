@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:goldkey:schema:commerce-response:v1",
+  "title": "GoldKey commerce response v1",
+  "description": "A deterministic primary-mint versus paygo decision. The response never submits a transaction.",
+  "type": "object",
+  "required": [
+    "schema",
+    "quote_id",
+    "quote_created_at",
+    "quote_valid_until",
+    "recommendation",
+    "reason_codes",
+    "assumptions",
+    "paygo_cost_usdc",
+    "key_count",
+    "key_purchase_cost_usdc",
+    "overflow_paygo_calls",
+    "overflow_paygo_cost_usdc",
+    "optimized_total_cost_usdc",
+    "raw_savings_usdc",
+    "risk_adjusted_savings_usdc",
+    "break_even_calls",
+    "forecast_calls",
+    "term_days",
+    "included_calls_per_key",
+    "contract",
+    "chain_id",
+    "supply_remaining",
+    "supply_total_minted",
+    "supply_block_number",
+    "sales_paused",
+    "onchain_mint_price_atomic",
+    "payment_token",
+    "payment_token_decimals",
+    "terms_hash",
+    "terms_uri",
+    "response_schema_url",
+    "authorization_status",
+    "next_action",
+    "unsigned_transactions"
+  ],
+  "properties": {
+    "schema": { "const": "goldkey.commerce-response.v1" },
+    "quote_id": { "type": "string", "format": "uuid" },
+    "quote_created_at": { "type": "string", "format": "date-time" },
+    "quote_valid_until": { "type": "string", "format": "date-time" },
+    "recommendation": {
+      "oneOf": [
+        { "enum": ["DO_NOT_BUY", "PAYGO", "TRIAL"] },
+        { "type": "string", "pattern": "^BUY_[1-9][0-9]*_KEYS?$" }
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "paygo_cost_usdc": { "$ref": "#/$defs/nonNegativeMoney" },
+    "key_count": { "type": "integer", "minimum": 0, "maximum": 1000 },
+    "key_purchase_cost_usdc": { "$ref": "#/$defs/nonNegativeMoney" },
+    "overflow_paygo_calls": { "type": "integer", "minimum": 0 },
+    "overflow_paygo_cost_usdc": { "$ref": "#/$defs/nonNegativeMoney" },
+    "optimized_total_cost_usdc": { "$ref": "#/$defs/nonNegativeMoney" },
+    "raw_savings_usdc": { "$ref": "#/$defs/nonNegativeMoney" },
+    "risk_adjusted_savings_usdc": { "$ref": "#/$defs/signedMoney" },
+    "break_even_calls": { "const": 5000 },
+    "forecast_calls": { "type": "integer", "minimum": 0, "maximum": 10000000 },
+    "term_days": { "const": 365 },
+    "included_calls_per_key": { "const": 10000 },
+    "contract": { "$ref": "#/$defs/address" },
+    "chain_id": { "type": "integer", "minimum": 1 },
+    "supply_remaining": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "supply_total_minted": { "type": "string", "pattern": "^[0-9]+$" },
+    "supply_block_number": { "type": "string", "pattern": "^[0-9]+$" },
+    "sales_paused": { "type": "boolean" },
+    "onchain_mint_price_atomic": { "type": "string", "pattern": "^[0-9]+$" },
+    "payment_token": { "$ref": "#/$defs/address" },
+    "payment_token_decimals": { "const": 6 },
+    "terms_hash": { "type": "string", "pattern": "^0x[0-9a-fA-F]{64}$" },
+    "terms_uri": { "type": "string" },
+    "response_schema_url": { "type": "string", "format": "uri" },
+    "authorization_status": { "enum": ["INFO_ONLY", "DECLARED_AUTHORIZED"] },
+    "next_action": {
+      "enum": [
+        "USE_PAYGO",
+        "MEASURE_USAGE",
+        "PROVIDE_WALLET",
+        "OBTAIN_PURCHASE_AUTHORITY",
+        "SIGN_UNSIGNED_TRANSACTIONS"
+      ]
+    },
+    "unsigned_transactions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["purpose", "to", "value", "data"],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "batch_index": {
+            "oneOf": [
+              { "type": "integer", "minimum": 1 },
+              { "type": "null" }
+            ]
+          },
+          "step": { "type": "integer", "minimum": 1 },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "uniqueItems": true
+          },
+          "purpose": { "type": "string", "minLength": 1 },
+          "to": { "$ref": "#/$defs/address" },
+          "value": { "type": "string", "pattern": "^[0-9]+$" },
+          "data": { "type": "string", "pattern": "^0x[0-9a-fA-F]*$" },
+          "asset_amount_atomic": { "type": "string", "pattern": "^[0-9]+$" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "sales_message": { "type": "string" }
+  },
+  "$defs": {
+    "address": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{40}$"
+    },
+    "nonNegativeMoney": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]{2}$"
+    },
+    "signedMoney": {
+      "type": "string",
+      "pattern": "^-?[0-9]+\\.[0-9]{2}$"
+    }
+  },
+  "additionalProperties": true
+}

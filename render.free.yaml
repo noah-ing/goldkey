@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: goldkey-api-free
+    runtime: docker
+    plan: free
+    region: ohio
+    numInstances: 1
+    autoDeployTrigger: off
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 30
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_POOL_MAX
+        value: "5"
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: CHAIN_ID
+        value: "8453"
+      - key: RPC_URL
+        sync: false
+      - key: GOLDKEY_CONTRACT
+        sync: false
+      - key: USDC_ADDRESS
+        value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      - key: TREASURY_ADDRESS
+        sync: false
+      - key: X402_ENABLED
+        value: "true"
+      - key: X402_FACILITATOR_URL
+        value: "https://api.cdp.coinbase.com/platform/v2/x402"
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: DEV_AUTH_BYPASS
+        value: "false"

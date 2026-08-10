@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+data/
+.env
+.dev.vars
+.wrangler/
+.wrangler-dist/
+*.keystore
+*.pem
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+coverage/
+*.log

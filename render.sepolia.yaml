@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: goldkey-sepolia
+    runtime: docker
+    plan: starter
+    region: ohio
+    numInstances: 1
+    autoDeployTrigger: off
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 30
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    disk:
+      name: goldkey-sepolia-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: staging
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: DATABASE_PATH
+        value: /app/data/goldkey.sqlite
+      - key: CHAIN_ID
+        value: "84532"
+      - key: RPC_URL
+        sync: false
+      - key: GOLDKEY_CONTRACT
+        sync: false
+      - key: USDC_ADDRESS
+        value: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      - key: TREASURY_ADDRESS
+        sync: false
+      - key: X402_ENABLED
+        value: "true"
+      - key: X402_FACILITATOR_URL
+        value: "https://api.cdp.coinbase.com/platform/v2/x402"
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: DEV_AUTH_BYPASS
+        value: "false"

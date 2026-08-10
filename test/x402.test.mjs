@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { assertFacilitatorSupport, validateX402Facilitator } from "../src/x402.mjs";
+
+const config = Object.freeze({ chainId: 8453, x402Enabled: true });
+
+test("x402 startup accepts only v2 exact support on the configured chain", async () => {
+  const facilitator = {
+    async getSupported() {
+      return {
+        kinds: [
+          { x402Version: 1, scheme: "exact", network: "eip155:8453" },
+          { x402Version: 2, scheme: "exact", network: "eip155:8453" },
+        ],
+      };
+    },
+  };
+  assert.deepEqual(await validateX402Facilitator(config, facilitator), {
+    enabled: true,
+    x402Version: 2,
+    scheme: "exact",
+    network: "eip155:8453",
+  });
+});
+
+test("x402 startup fails closed for the wrong network or protocol", () => {
+  assert.throws(
+    () => assertFacilitatorSupport({ kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:84532" }] }, config),
+    /does not advertise v2 exact payments on eip155:8453/,
+  );
+  assert.throws(
+    () => assertFacilitatorSupport({ kinds: [{ x402Version: 1, scheme: "exact", network: "eip155:8453" }] }, config),
+    /does not advertise v2 exact payments on eip155:8453/,
+  );
+});
+
+test("x402 startup skips facilitator calls when paygo is disabled", async () => {
+  const result = await validateX402Facilitator({ ...config, x402Enabled: false }, {
+    async getSupported() {
+      throw new Error("must not be called");
+    },
+  });
+  assert.deepEqual(result, { enabled: false });
+});

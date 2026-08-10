@@ -1,0 +1,10 @@
+node_modules/
+data/
+.env
+.git/
+.github/
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+coverage/
+*.log

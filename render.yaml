@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: goldkey-api
+    runtime: docker
+    plan: starter
+    region: ohio
+    numInstances: 1
+    autoDeployTrigger: off
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 30
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    disk:
+      name: goldkey-mainnet-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUBLIC_ORIGIN
+        sync: false
+      - key: DATABASE_PATH
+        value: /app/data/goldkey.sqlite
+      - key: CHAIN_ID
+        value: "8453"
+      - key: RPC_URL
+        sync: false
+      - key: GOLDKEY_CONTRACT
+        sync: false
+      - key: USDC_ADDRESS
+        value: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      - key: TREASURY_ADDRESS
+        sync: false
+      - key: X402_ENABLED
+        value: "true"
+      - key: X402_FACILITATOR_URL
+        value: "https://api.cdp.coinbase.com/platform/v2/x402"
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: DEV_AUTH_BYPASS
+        value: "false"
