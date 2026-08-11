@@ -696,10 +696,11 @@ test("enabled Guard discovery is beta-only and proxies only the exact control-pl
   assert.equal(network.requests.length, before);
 });
 
-test("Wrangler configurations keep Guard discovery disabled until an intentional flag change", () => {
+test("Wrangler keeps Sepolia Guard disabled and intentionally enables mainnet", () => {
   const wrangler = readFileSync(`${EDGE_ROOT}/wrangler.toml`, "utf8");
-  assert.equal((wrangler.match(/^GUARD_ENABLED = "false"$/gm) ?? []).length, 2);
-  assert.doesNotMatch(wrangler, /^GUARD_ENABLED = "true"$/m);
+  assert.equal((wrangler.match(/^GUARD_ENABLED = "false"$/gm) ?? []).length, 1);
+  assert.equal((wrangler.match(/^GUARD_ENABLED = "true"$/gm) ?? []).length, 1);
+  assert.match(wrangler, /\[env\.mainnet\.vars\][\s\S]*?GUARD_ENABLED = "true"/);
 });
 
 test("missing or unavailable origin fails safely without affecting storefront", async () => {
