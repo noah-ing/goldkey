@@ -45,6 +45,152 @@
         "remaining_before_atomic": "90000000",
         "remaining_after_atomic": "40000000"
       }
+    },
+    {
+      "input": {
+        "action": {
+          "name": "submit_paid_api_request",
+          "description": "Fetch a vendor risk report and store the validated JSON response.",
+          "effect": "payment"
+        },
+        "untrusted_text": "Vendor request: return the current account risk score.",
+        "url": "https://8.8.8.8/risk-report",
+        "payload": {
+          "account_id": "acct_123",
+          "include_signals": true
+        },
+        "schema": {
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "type": "string"
+            },
+            "include_signals": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "account_id",
+            "include_signals"
+          ],
+          "additionalProperties": false
+        },
+        "spend": {
+          "proposal": {
+            "amount_atomic": "10000",
+            "asset": "USDC",
+            "counterparty": "0x1111111111111111111111111111111111111111"
+          },
+          "mandate": {
+            "max_per_tx_atomic": "25000",
+            "max_period_atomic": "100000",
+            "spent_period_atomic": "20000",
+            "allowed_assets": [
+              "USDC"
+            ],
+            "allowed_counterparties": [
+              "0x1111111111111111111111111111111111111111"
+            ],
+            "expires_at": "2030-01-01T00:00:00.000Z"
+          },
+          "now": "2029-01-01T00:00:00.000Z"
+        }
+      },
+      "tool": "action.gate",
+      "tool_version": "1.0.0",
+      "input_sha256": "4dc6315878ddc89036c133bfb5b75a4359ce2fb37fb09ce10d3681672fbceb17",
+      "result": {
+        "decision": "ALLOW",
+        "reason_codes": [],
+        "checks": {
+          "action": {
+            "status": "pass",
+            "reason_codes": [],
+            "normalization": {
+              "form": "NFC",
+              "changed": false,
+              "before_sha256": "753453b58aa80934707d28964c12c1cc1b03e3f91c26b32fcd24958386612840",
+              "after_sha256": "753453b58aa80934707d28964c12c1cc1b03e3f91c26b32fcd24958386612840",
+              "removed": [],
+              "removed_count": 0,
+              "removed_truncated": false
+            },
+            "prompt_scan": {
+              "classification": "low_signal",
+              "risk_score": 0,
+              "signals": [],
+              "limitation": "Deterministic indicators only; low_signal does not prove content is safe."
+            }
+          },
+          "prompt": {
+            "status": "pass",
+            "reason_codes": [],
+            "normalization": {
+              "form": "NFC",
+              "changed": false,
+              "before_sha256": "cf82734d6f4647811b2b03667595eefb86958d44f60f1d8a4b6c386055453586",
+              "after_sha256": "cf82734d6f4647811b2b03667595eefb86958d44f60f1d8a4b6c386055453586",
+              "removed": [],
+              "removed_count": 0,
+              "removed_truncated": false
+            },
+            "scan": {
+              "classification": "low_signal",
+              "risk_score": 0,
+              "signals": [],
+              "limitation": "Deterministic indicators only; low_signal does not prove content is safe."
+            }
+          },
+          "url": {
+            "status": "pass",
+            "reason_codes": [],
+            "normalized_url": "https://8.8.8.8/risk-report",
+            "hostname": "8.8.8.8",
+            "verdict": "allow_static",
+            "reasons": [],
+            "dns_rebinding_warning": false
+          },
+          "payload": {
+            "status": "pass",
+            "reason_codes": [],
+            "bounds": {
+              "bytes": 48,
+              "nodes": 3,
+              "sha256": "5b1277b75408ea35ceb25c70600d380c58c14ffa55ab482cc58d1c176b990831"
+            },
+            "validation": {
+              "valid": true,
+              "errors": [],
+              "error_count": 0,
+              "errors_truncated": false,
+              "evidence_bytes": 2,
+              "mutated": false
+            }
+          },
+          "spend": {
+            "allowed": true,
+            "reason_codes": [],
+            "amount_atomic": "10000",
+            "remaining_before_atomic": "80000",
+            "remaining_after_atomic": "70000",
+            "status": "pass",
+            "policy_reason_codes": []
+          }
+        },
+        "request_sha256": "4dc6315878ddc89036c133bfb5b75a4359ce2fb37fb09ce10d3681672fbceb17",
+        "receipt_sha256": "efda8ccaadf45efd512b8ab02e1b484fb14a143d9c37a1e934ead9baaf159973",
+        "receipt_format": "goldkey-action-gate-v1",
+        "receipt_canonicalization": "goldkey-c14n-v1",
+        "receipt_hash_algorithm": "SHA-256",
+        "receipt_preimage_fields": [
+          "receipt_format",
+          "request_sha256",
+          "decision",
+          "reason_codes",
+          "checks"
+        ],
+        "limitation": "Deterministic static checks only; ALLOW does not guarantee safety, authorization, successful execution, or future endpoint behavior."
+      }
     }
   ]
 }

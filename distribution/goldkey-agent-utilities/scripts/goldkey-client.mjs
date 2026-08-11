@@ -263,13 +263,13 @@ async function request(path, { method = "GET", body, token, headers = {}, valida
   return validateAs ? validateIdentityPayload(validateAs, payload, context.runtime.identity) : payload;
 }
 
-async function paymentProbe(tool, input, context) {
+async function paymentProbe(path, requestBody, context, label, fallbackCode) {
   if (!context.runtime.canonical) fail("Refusing to probe x402 payment against a noncanonical development origin");
-  const response = await context.fetchImpl(`${context.runtime.origin}/v1/paygo/execute`, {
+  const response = await context.fetchImpl(`${context.runtime.origin}${path}`, {
     method: "POST",
     redirect: "error",
     headers: { accept: "application/json", "content-type": "application/json" },
-    body: JSON.stringify({ tool, input }),
+    body: JSON.stringify(requestBody),
   });
   const text = await response.text();
   let body;
@@ -279,8 +279,8 @@ async function paymentProbe(tool, input, context) {
     body = text || null;
   }
   if (response.status !== 402) {
-    if (response.ok) fail("Paygo executed without an x402 payment challenge; no payment was authorized");
-    const code = body?.error?.code || "paygo_probe_failed";
+    if (response.ok) fail(`${label} executed without an x402 payment challenge; no payment was authorized`);
+    const code = body?.error?.code || fallbackCode;
     const message = body?.error?.message || `HTTP ${response.status}`;
     fail(`${code}: ${message}`);
   }
@@ -295,7 +295,7 @@ async function paymentProbe(tool, input, context) {
   }
   if (!challenge || typeof challenge !== "object" || Array.isArray(challenge)) fail("PAYMENT-REQUIRED challenge must be an object");
   if (challenge.x402Version !== 2) fail("PAYMENT-REQUIRED challenge must use x402 v2");
-  const resource = `${context.runtime.origin}/v1/paygo/execute`;
+  const resource = `${context.runtime.origin}${path}`;
   if (challenge.resource?.url !== resource) fail("PAYMENT-REQUIRED resource URL does not match the canonical endpoint");
   if (!Array.isArray(challenge.accepts) || challenge.accepts.length !== 1) fail("PAYMENT-REQUIRED challenge must contain exactly one payment option");
   const option = challenge.accepts[0];
@@ -380,6 +380,7 @@ Commands:
   key-issue --secret-output /absolute/private/file --body JSON_OBJECT
   key-revoke --id KEY_ID
   keys-revoke-all
+  action-gate-probe --input JSON_OBJECT
   paygo-probe --name TOOL --input JSON_OBJECT
   self-test
 
@@ -459,7 +460,24 @@ export async function run(argv, options = {}) {
     return request(`/v1/keys/${encodeURIComponent(required(flags, "id"))}`, { method: "DELETE", token: accessToken(env) }, context);
   }
   if (command === "keys-revoke-all") return request("/v1/keys", { method: "DELETE", token: accessToken(env) }, context);
-  if (command === "paygo-probe") return paymentProbe(required(flags, "name"), jsonFlag(flags, "input"), context);
+  if (command === "action-gate-probe") {
+    return paymentProbe(
+      "/v1/action-gate",
+      jsonFlag(flags, "input"),
+      context,
+      "Action Gate",
+      "action_gate_probe_failed",
+    );
+  }
+  if (command === "paygo-probe") {
+    return paymentProbe(
+      "/v1/paygo/execute",
+      { tool: required(flags, "name"), input: jsonFlag(flags, "input") },
+      context,
+      "Paygo",
+      "paygo_probe_failed",
+    );
+  }
   fail(`Unknown command: ${command}`);
 }
 

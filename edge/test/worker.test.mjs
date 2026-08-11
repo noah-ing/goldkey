@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -141,6 +142,16 @@ function resolveLocalRef(document, ref) {
   return ref.slice(2).split("/").reduce((value, segment) => value?.[segment.replaceAll("~1", "/").replaceAll("~0", "~")], document);
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "string" || typeof value === "number") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+}
+
+function canonicalSha256(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
 test("deployed static artifacts are byte-identical to canonical terms and schema", () => {
   assert.deepEqual(termsAsset, readFileSync(`${PACKAGE_ROOT}/TERMS.md`));
   assert.deepEqual(schemaAsset, readFileSync(`${PACKAGE_ROOT}/agent/goldkey-commerce-response.schema.json`));
@@ -203,21 +214,28 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(health.storefront, "ready");
   assert.equal(health.origin_checked, false);
   const openapi = await body(await worker.fetch(new Request("https://edge.example/openapi.json"), env()));
+  const postedCatalog = await body(await worker.fetch(new Request("https://edge.example/v1/catalog"), env()));
   const paygo = openapi.paths["/v1/paygo/execute"].post;
+  const actionGate = openapi.paths["/v1/action-gate"].post;
   assert.equal(paygo.tags[0], "origin");
+  assert.equal(actionGate.tags[0], "origin");
+  assert.equal(actionGate.operationId, "goldkey_action_gate");
+  assert.match(openapi.info["x-guidance"], /POST \/v1\/action-gate/);
   assert.match(openapi.info["x-guidance"], /POST \/v1\/paygo\/execute/);
   assert.match(openapi.info["x-guidance"], /0\.01 USDC/);
-  assert.match(paygo.summary, /^\$0\.01-USDC Base x402 access to six deterministic tools:/);
-  assert.match(paygo.description, /^For \$0\.01 USDC per x402 call on Base, execute one of six deterministic utilities:/);
-  const deterministicTools = ["json.canonicalize", "json.validate", "security.prompt_scan", "security.url_check", "policy.spend_check", "text.normalize"];
+  assert.match(paygo.summary, /^\$0\.01-USDC Base x402 access to seven deterministic tools:/);
+  assert.match(paygo.description, /^For \$0\.01 USDC per x402 call on Base, execute one of seven deterministic utilities:/);
+  const deterministicTools = ["json.canonicalize", "json.validate", "security.prompt_scan", "security.url_check", "policy.spend_check", "text.normalize", "action.gate"];
   assert.deepEqual(paygo.requestBody.content["application/json"].schema.properties.tool.enum, deterministicTools);
+  assert.deepEqual(postedCatalog.tools.map(({ name }) => name), deterministicTools);
+  assert.equal(postedCatalog.tools.length, 7);
   for (const tool of deterministicTools) {
     assert.match(paygo.summary, new RegExp(tool.replace(".", "\\.")));
     assert.match(paygo.description, new RegExp(tool.replace(".", "\\.")));
   }
-  assert.match(paygo.description, /validates the envelope before payment verification/);
-  assert.match(paygo.description, /settles payment, and only then releases the result/);
-  assert.match(paygo.description, /failed validation or settlement does not return a tool result/);
+  assert.match(paygo.description, /validates a fixed bounded envelope before payment verification/);
+  assert.match(paygo.description, /settles payment, and only then releases it/);
+  assert.match(paygo.description, /failed evaluation or settlement does not return a tool result/);
   assert.match(paygo.description, /successfully settled retry is a new purchase/);
   assert.deepEqual(paygo["x-payment-info"], {
     price: { mode: "fixed", currency: "USD", amount: "0.01" },
@@ -225,6 +243,17 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   });
   assert.equal(paygo.responses[402].description, "Payment Required");
   assert.equal(paygo.responses[200].content["application/json"].schema.$ref, "#/components/schemas/PaygoResponse");
+  assert.match(actionGate.summary, /^\$0\.01 AI-agent tool-call preflight:/);
+  assert.match(actionGate.summary, /ALLOW, REVIEW, or BLOCK/);
+  assert.match(actionGate.description, /ALLOW, REVIEW, or BLOCK/);
+  assert.match(actionGate.description, /does not execute the proposed action/);
+  assert.match(actionGate.description, /validates a fixed bounded envelope before payment verification/);
+  assert.match(actionGate.description, /settles payment, and only then releases it/);
+  assert.doesNotMatch(`${actionGate.summary} ${actionGate.description}`, /signed receipt/i);
+  assert.deepEqual(actionGate["x-payment-info"], paygo["x-payment-info"]);
+  assert.equal(actionGate.requestBody.content["application/json"].schema.$ref, "#/components/schemas/ActionGateInput");
+  assert.equal(actionGate.responses[200].content["application/json"].schema.$ref, "#/components/schemas/ActionGateResponse");
+  assert.equal(actionGate.responses[402].description, "Payment Required");
   assert.equal(openapi.paths["/v1/purchase/quote"].post.responses[200].content["application/json"].schema.$ref, "#/components/schemas/CommerceResponse");
   assert.ok(openapi.components.schemas.CommerceResponse.required.includes("recommendation"));
   assert.ok(openapi.components.schemas.CommerceResponse.required.includes("unsigned_transactions"));
@@ -233,6 +262,23 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(openapi.paths["/v1/auth/challenge"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/AuthChallengeRequest");
   assert.equal(openapi.paths["/v1/auth/verify"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/AuthVerifyRequest");
   assert.deepEqual(openapi.components.schemas.PaygoResponse.required, ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"]);
+  const catalogActionGate = postedCatalog.tools.find(({ name }) => name === "action.gate");
+  assert.equal(catalogActionGate.version, "1.0.0");
+  assert.equal(catalogActionGate.quota_units, 1);
+  assert.equal(catalogActionGate.paygo_price_usdc, "0.01");
+  assert.match(catalogActionGate.description, /reproducible receipt hash/);
+  assert.deepEqual(catalogActionGate.input_schema, openapi.components.schemas.ActionGateInput);
+  const gateSchema = openapi.components.schemas.ActionGateInput;
+  assert.deepEqual(gateSchema.required, ["action"]);
+  assert.deepEqual(gateSchema.properties.action.required, ["name", "effect"]);
+  assert.deepEqual(gateSchema.dependentRequired, { payload: ["schema"], schema: ["payload"] });
+  assert.deepEqual(gateSchema.properties.action.properties.effect.enum, ["read", "write", "network", "payment", "execute"]);
+  assert.deepEqual(gateSchema.properties.spend.required, ["proposal", "mandate", "now"]);
+  assert.deepEqual(gateSchema.properties.spend.properties.proposal.required, ["amount_atomic", "asset", "counterparty"]);
+  assert.equal(gateSchema.properties.spend.properties.proposal.properties.amount_atomic.pattern, "^(0|[1-9]\\d*)$");
+  assert.equal(gateSchema.properties.spend.properties.mandate.properties.max_per_tx_atomic.pattern, "^(0|[1-9]\\d*)$");
+  assert.deepEqual(gateSchema.properties.spend.properties.mandate.required, ["max_per_tx_atomic", "max_period_atomic", "allowed_assets", "expires_at"]);
+  assert.equal(gateSchema.additionalProperties, false);
   for (const ref of collectRefs(openapi)) {
     assert.match(ref, /^#\//, `${ref} must be a local OpenAPI reference`);
     assert.ok(resolveLocalRef(openapi, ref), `${ref} must resolve within the OpenAPI document`);
@@ -242,6 +288,24 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(demo.free_fixed_examples, true);
   assert.equal(demo.examples[0].tool, "security.prompt_scan");
   assert.equal(demo.examples[1].tool, "policy.spend_check");
+  const actionGateDemo = demo.examples[2];
+  assert.equal(actionGateDemo.tool, "action.gate");
+  assert.equal(actionGateDemo.result.decision, "ALLOW");
+  assert.deepEqual(actionGateDemo.result.reason_codes, []);
+  assert.equal(actionGateDemo.result.receipt_format, "goldkey-action-gate-v1");
+  assert.equal(actionGateDemo.result.receipt_canonicalization, "goldkey-c14n-v1");
+  assert.equal(actionGateDemo.result.receipt_hash_algorithm, "SHA-256");
+  assert.deepEqual(actionGateDemo.result.receipt_preimage_fields, ["receipt_format", "request_sha256", "decision", "reason_codes", "checks"]);
+  assert.match(actionGateDemo.result.limitation, /ALLOW does not guarantee safety/);
+  assert.equal(actionGateDemo.input_sha256, canonicalSha256({ tool: "action.gate", version: "1.0.0", input: actionGateDemo.input }));
+  assert.equal(actionGateDemo.result.request_sha256, actionGateDemo.input_sha256);
+  assert.equal(actionGateDemo.result.receipt_sha256, canonicalSha256({
+    receipt_format: actionGateDemo.result.receipt_format,
+    request_sha256: actionGateDemo.result.request_sha256,
+    decision: actionGateDemo.result.decision,
+    reason_codes: actionGateDemo.result.reason_codes,
+    checks: actionGateDemo.result.checks,
+  }));
   assert.equal(network.requests.length, 0);
 });
 
@@ -395,11 +459,29 @@ test("only the exact stateful allowlist is proxied and important headers survive
   assert.equal(echo.payment_signature, "signed-payment");
   assert.equal(echo.body, JSON.stringify({ value: 1 }));
 
+  const gateInput = { action: { name: "inspect_before_fetch", effect: "network" }, url: "https://8.8.8.8/resource" };
+  const gate = await worker.fetch(new Request("https://edge.example/v1/action-gate?trace=gate", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "payment-signature": "signed-gate-payment",
+    },
+    body: JSON.stringify(gateInput),
+  }), env());
+  assert.equal(gate.status, 200);
+  const gateEcho = await body(gate);
+  assert.equal(gateEcho.path, "/v1/action-gate");
+  assert.equal(gateEcho.query, "?trace=gate");
+  assert.equal(gateEcho.payment_signature, "signed-gate-payment");
+  assert.equal(gateEcho.body, JSON.stringify(gateInput));
+
   const before = network.requests.length;
   const unknown = await worker.fetch(new Request("https://edge.example/v1/admin/secrets"), env());
   assert.equal(unknown.status, 404);
   const wrongMethod = await worker.fetch(new Request("https://edge.example/v1/auth/challenge"), env());
   assert.equal(wrongMethod.status, 405);
+  const wrongGateMethod = await worker.fetch(new Request("https://edge.example/v1/action-gate"), env());
+  assert.equal(wrongGateMethod.status, 405);
   assert.equal(network.requests.length, before);
 });
 

@@ -6,12 +6,95 @@ import { ServiceError, assert } from "./errors.mjs";
 
 const MAX_TEXT_LENGTH = 64 * 1024;
 const MAX_SCHEMA_BYTES = 32 * 1024;
-const MAX_SCHEMA_NODES = 1000;
+const MAX_SCHEMA_NODES = 256;
 const MAX_SCHEMA_DEPTH = 20;
 const MAX_EVIDENCE_ITEMS = 100;
+const MAX_VALIDATION_ERROR_PARAMS_BYTES = 1024;
+const MAX_VALIDATION_EVIDENCE_BYTES = 32 * 1024;
 const MAX_VALIDATOR_CACHE = 64;
+const MAX_ACTION_NAME_LENGTH = 128;
+const MAX_ACTION_DESCRIPTION_LENGTH = 4096;
+const MAX_ACTION_UNTRUSTED_TEXT_LENGTH = 16 * 1024;
+const MAX_ACTION_PAYLOAD_BYTES = 32 * 1024;
+const MAX_ACTION_PAYLOAD_NODES = 2000;
+const MAX_ACTION_PAYLOAD_DEPTH = 16;
+const MAX_ACTION_GATE_REQUEST_BYTES = 256 * 1024;
 const VERSION = "1.0.0";
 const validatorCache = new Map();
+
+const atomicStringSchema = { type: "string", pattern: "^(0|[1-9]\\d*)$", minLength: 1, maxLength: 78 };
+const shortStringSchema = { type: "string", minLength: 1, maxLength: 256 };
+
+const ACTION_GATE_INPUT_SCHEMA = {
+  type: "object",
+  description: "One bounded proposed agent action plus only the evidence that Action Gate should evaluate. Omitted optional evidence is not checked.",
+  properties: {
+    action: {
+      type: "object",
+      description: "Declare the proposed action and its effect class. Action Gate never performs it.",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: MAX_ACTION_NAME_LENGTH, description: "Stable action name, such as fetch_vendor_quote or submit_payment." },
+        description: { type: "string", maxLength: MAX_ACTION_DESCRIPTION_LENGTH, description: "Optional human-readable action description; it is scanned as untrusted text." },
+        effect: { enum: ["read", "write", "network", "payment", "execute"], description: "Required effect class. Network requires url; payment requires spend; write and execute require payload plus schema to avoid an evidence-free ALLOW." },
+      },
+      required: ["name", "effect"],
+      additionalProperties: false,
+    },
+    untrusted_text: { type: "string", maxLength: MAX_ACTION_UNTRUSTED_TEXT_LENGTH, description: "Optional untrusted text to scan for prompt-injection, exfiltration, control-character, and bidi signals." },
+    url: { type: "string", maxLength: 4096, description: "Optional absolute URL for static scheme, credential, port, hostname, and direct-IP screening. No DNS lookup or fetch occurs." },
+    payload: { description: "Optional JSON payload proposed for a write or execution. When present, schema is required and both are bounded." },
+    schema: { type: "object", description: "Bounded local JSON Schema used to validate payload. Remote references and regular-expression keywords are rejected." },
+    spend: {
+      type: "object",
+      description: "Optional payment proposal and mandate evaluated in exact atomic units at the caller-supplied deterministic time.",
+      properties: {
+        proposal: {
+          type: "object",
+          properties: {
+            amount_atomic: { ...atomicStringSchema, description: "Canonical non-negative integer string in the asset's atomic units; never use decimal or exponent notation." },
+            asset: { ...shortStringSchema, description: "Exact asset identifier compared with mandate.allowed_assets." },
+            counterparty: { ...shortStringSchema, description: "Exact counterparty identifier, compared case-insensitively when the mandate lists counterparties." },
+          },
+          required: ["amount_atomic", "asset", "counterparty"],
+          additionalProperties: false,
+        },
+        mandate: {
+          type: "object",
+          properties: {
+            max_per_tx_atomic: { ...atomicStringSchema, description: "Per-transaction cap as a canonical atomic-unit integer string." },
+            max_period_atomic: { ...atomicStringSchema, description: "Period cap as a canonical atomic-unit integer string." },
+            spent_period_atomic: { ...atomicStringSchema, description: "Optional already-spent amount in the same period; defaults to zero." },
+            allowed_assets: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              uniqueItems: true,
+              items: shortStringSchema,
+            },
+            allowed_counterparties: {
+              type: "array",
+              maxItems: 100,
+              uniqueItems: true,
+              items: shortStringSchema,
+            },
+            expires_at: { type: "string", format: "date-time", description: "Mandate expiry as an ISO 8601 date-time." },
+          },
+          required: ["max_per_tx_atomic", "max_period_atomic", "allowed_assets", "expires_at"],
+          additionalProperties: false,
+        },
+        now: { type: "string", format: "date-time", description: "Required caller-supplied ISO 8601 evaluation time; Action Gate never reads the server clock." },
+      },
+      required: ["proposal", "mandate", "now"],
+      additionalProperties: false,
+    },
+  },
+  required: ["action"],
+  dependentRequired: {
+    payload: ["schema"],
+    schema: ["payload"],
+  },
+  additionalProperties: false,
+};
 
 const toolDefinitions = [
   {
@@ -83,6 +166,11 @@ const toolDefinitions = [
       additionalProperties: false,
     },
   },
+  {
+    name: "action.gate",
+    description: "Deterministically evaluate a bounded proposed agent action across prompt, Unicode, URL, payload-schema, and spend-mandate checks, returning ALLOW, REVIEW, or BLOCK with a reproducible receipt hash.",
+    input_schema: ACTION_GATE_INPUT_SCHEMA,
+  },
 ];
 
 export const TOOL_REGISTRY = Object.freeze(
@@ -132,20 +220,59 @@ function assertSafeSchema(schema) {
   }
 }
 
-function compiledValidator(schema) {
-  const cacheKey = sha256(JSON.stringify(schema));
-  const cached = validatorCache.get(cacheKey);
-  if (cached) {
+function compiledValidator(schema, { cache = true } = {}) {
+  const canonicalSchema = canonicalize(schema);
+  const cacheKey = sha256(canonicalSchema);
+  const cached = cache ? validatorCache.get(cacheKey) : undefined;
+  if (cache && cached) {
     validatorCache.delete(cacheKey);
     validatorCache.set(cacheKey, cached);
     return cached;
   }
-  const ajv = new Ajv2020({ allErrors: true, strict: true, coerceTypes: false, useDefaults: false, removeAdditional: false });
+  // Stop at the first validation failure. Materializing every failure lets a
+  // small allOf/array input amplify into hundreds of thousands of Ajv errors.
+  // Compile canonicalized schema bytes so the first failure is stable across
+  // equivalent object-key insertion orders.
+  const ajv = new Ajv2020({ allErrors: false, strict: true, coerceTypes: false, useDefaults: false, removeAdditional: false });
   addFormats(ajv);
-  const validate = ajv.compile(schema);
-  validatorCache.set(cacheKey, validate);
-  if (validatorCache.size > MAX_VALIDATOR_CACHE) validatorCache.delete(validatorCache.keys().next().value);
+  const validate = ajv.compile(JSON.parse(canonicalSchema));
+  if (cache) {
+    validatorCache.set(cacheKey, validate);
+    if (validatorCache.size > MAX_VALIDATOR_CACHE) validatorCache.delete(validatorCache.keys().next().value);
+  }
   return validate;
+}
+
+function boundedValidationErrors(rawErrors) {
+  const normalized = rawErrors
+    .map(({ instancePath, schemaPath, keyword, message, params }) => {
+      const rawParams = params ?? {};
+      const canonicalParams = canonicalize(rawParams);
+      const paramsBytes = Buffer.byteLength(canonicalParams);
+      return {
+        instancePath,
+        schemaPath,
+        keyword,
+        message,
+        params: paramsBytes <= MAX_VALIDATION_ERROR_PARAMS_BYTES
+          ? rawParams
+          : { truncated: true, byte_length: paramsBytes, sha256: sha256(canonicalParams) },
+      };
+    })
+    .map((error) => ({ error, sortKey: canonicalize(error) }))
+    .sort((left, right) => left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0)
+    .map(({ error }) => error);
+  const errors = [];
+  let evidenceBytes = 2;
+  for (const error of normalized) {
+    if (errors.length >= MAX_EVIDENCE_ITEMS) break;
+    const encoded = canonicalize(error);
+    const nextBytes = Buffer.byteLength(encoded) + (errors.length === 0 ? 0 : 1);
+    if (evidenceBytes + nextBytes > MAX_VALIDATION_EVIDENCE_BYTES) break;
+    errors.push(error);
+    evidenceBytes += nextBytes;
+  }
+  return { errors, errorCount: normalized.length, evidenceBytes };
 }
 
 function isPrivateIPv4(hostname) {
@@ -170,6 +297,13 @@ function isPrivateIPv6(hostname) {
   if (host === "::" || host === "::1") return true;
   if (/^(?:fc|fd|fe8|fe9|fea|feb|ff)/.test(host)) return true;
   if (host.startsWith("2001:db8:")) return true;
+  const mappedHex = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const high = Number.parseInt(mappedHex[1], 16);
+    const low = Number.parseInt(mappedHex[2], 16);
+    const mappedIpv4 = `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+    return isPrivateIPv4(mappedIpv4);
+  }
   const mapped = host.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   return mapped ? isPrivateIPv4(mapped[1]) : false;
 }
@@ -181,25 +315,34 @@ function runCanonicalize(input) {
   return { format: "goldkey-c14n-v1", canonical, sha256: sha256(canonical) };
 }
 
-function runValidate(input) {
-  requireObject(input);
-  requireObject(input.schema, "schema");
-  assert(Buffer.byteLength(JSON.stringify(input.schema)) <= MAX_SCHEMA_BYTES, 413, "schema_too_large", `schema exceeds ${MAX_SCHEMA_BYTES} bytes`);
-  assertSafeSchema(input.schema);
+function validateValueAgainstSchema(value, schema, { cache = false } = {}) {
   try {
-    const validate = compiledValidator(input.schema);
-    const valid = validate(input.value);
-    const errors = validate.errors ?? [];
+    const validate = compiledValidator(schema, { cache });
+    // Ajv's first reported error follows object insertion order. Validate a
+    // canonical deep clone so canonically identical JSON always yields the
+    // same evidence and receipt without mutating the caller's value.
+    const canonicalValue = JSON.parse(canonicalize(value));
+    const valid = validate(canonicalValue);
+    const bounded = boundedValidationErrors(validate.errors ?? []);
     return {
       valid: Boolean(valid),
-      errors: errors.slice(0, MAX_EVIDENCE_ITEMS).map(({ instancePath, schemaPath, keyword, message, params }) => ({ instancePath, schemaPath, keyword, message, params })),
-      error_count: errors.length,
-      errors_truncated: errors.length > MAX_EVIDENCE_ITEMS,
+      errors: bounded.errors,
+      error_count: bounded.errorCount,
+      errors_truncated: bounded.errors.length < bounded.errorCount,
+      evidence_bytes: bounded.evidenceBytes,
       mutated: false,
     };
   } catch (error) {
     throw new ServiceError(400, "invalid_schema", error.message);
   }
+}
+
+function runValidate(input) {
+  requireObject(input);
+  requireObject(input.schema, "schema");
+  assert(Buffer.byteLength(JSON.stringify(input.schema)) <= MAX_SCHEMA_BYTES, 413, "schema_too_large", `schema exceeds ${MAX_SCHEMA_BYTES} bytes`);
+  assertSafeSchema(input.schema);
+  return validateValueAgainstSchema(input.value, input.schema);
 }
 
 function runPromptScan(input) {
@@ -320,6 +463,167 @@ function runNormalize(input) {
   };
 }
 
+function assertBoundedPayload(value) {
+  const { canonical, sha256: payloadSha256 } = hashCanonical(value);
+  assert(Buffer.byteLength(canonical) <= MAX_ACTION_PAYLOAD_BYTES, 413, "action_payload_too_large", `payload exceeds ${MAX_ACTION_PAYLOAD_BYTES} canonical JSON bytes`);
+  const stack = [{ value, depth: 0 }];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    nodes += 1;
+    assert(nodes <= MAX_ACTION_PAYLOAD_NODES, 413, "action_payload_too_complex", `payload exceeds ${MAX_ACTION_PAYLOAD_NODES} nodes`);
+    assert(current.depth <= MAX_ACTION_PAYLOAD_DEPTH, 413, "action_payload_too_deep", `payload exceeds ${MAX_ACTION_PAYLOAD_DEPTH} levels`);
+    if (current.value && typeof current.value === "object") {
+      for (const child of Array.isArray(current.value) ? current.value : Object.values(current.value)) {
+        stack.push({ value: child, depth: current.depth + 1 });
+      }
+    }
+  }
+  return { bytes: Buffer.byteLength(canonical), nodes, sha256: payloadSha256 };
+}
+
+function summarizedNormalization(result) {
+  return {
+    form: result.form,
+    changed: result.changed,
+    before_sha256: result.before_sha256,
+    after_sha256: result.after_sha256,
+    removed: result.removed,
+    removed_count: result.removed_count,
+    removed_truncated: result.removed_truncated,
+  };
+}
+
+function runActionGate(input) {
+  requireObject(input);
+  const request = hashCanonical({ tool: "action.gate", version: VERSION, input });
+  assert(Buffer.byteLength(request.canonical) <= MAX_ACTION_GATE_REQUEST_BYTES, 413, "action_gate_request_too_large", `action.gate request exceeds ${MAX_ACTION_GATE_REQUEST_BYTES} canonical JSON bytes`);
+
+  const envelope = validateToolInput("action.gate", input);
+  assert(envelope.valid, 400, "invalid_action_gate_input", "action.gate input does not match its strict schema", { errors: envelope.errors, error_count: envelope.error_count });
+
+  const reasonCodes = [];
+  const statuses = [];
+  const record = (status, ...codes) => {
+    statuses.push(status);
+    reasonCodes.push(...codes);
+  };
+
+  const actionText = `${input.action.name}${input.action.description ? `\n${input.action.description}` : ""}`;
+  const actionNormalization = runNormalize({ text: actionText, form: "NFC", strip_controls: true, strip_bidi: true });
+  const actionPrompt = runPromptScan({ text: actionText });
+  let actionStatus = "pass";
+  const actionReasons = [];
+  if (actionNormalization.removed_count > 0) {
+    actionStatus = "block";
+    actionReasons.push("action_hidden_unicode");
+  }
+  if (actionPrompt.classification === "high_signal") {
+    actionStatus = "block";
+    actionReasons.push("action_prompt_high_signal");
+  } else if (actionPrompt.classification === "review" && actionStatus !== "block") {
+    actionStatus = "review";
+    actionReasons.push("action_prompt_review_signal");
+  }
+  const missingEvidenceReason = (
+    input.action.effect === "payment" && !Object.hasOwn(input, "spend") ? "payment_spend_not_provided" :
+    input.action.effect === "network" && !Object.hasOwn(input, "url") ? "network_url_not_provided" :
+    input.action.effect === "write" && !Object.hasOwn(input, "payload") ? "write_payload_not_provided" :
+    input.action.effect === "execute" && !Object.hasOwn(input, "payload") ? "execute_payload_not_provided" :
+    undefined
+  );
+  if (missingEvidenceReason) {
+    if (actionStatus !== "block") actionStatus = "review";
+    actionReasons.push(missingEvidenceReason);
+  }
+  record(actionStatus, ...actionReasons);
+
+  let promptCheck = { status: "not_provided" };
+  if (Object.hasOwn(input, "untrusted_text")) {
+    const normalization = runNormalize({ text: input.untrusted_text, form: "NFC", strip_controls: true, strip_bidi: true });
+    const scan = runPromptScan({ text: input.untrusted_text });
+    let status = "pass";
+    const reasons = [];
+    if (normalization.removed_count > 0) {
+      status = "block";
+      reasons.push("untrusted_text_hidden_unicode");
+    }
+    if (scan.classification === "high_signal") {
+      status = "block";
+      reasons.push("prompt_high_signal");
+    } else if (scan.classification === "review" && status !== "block") {
+      status = "review";
+      reasons.push("prompt_review_signal");
+    }
+    record(status, ...reasons);
+    promptCheck = { status, reason_codes: reasons, normalization: summarizedNormalization(normalization), scan };
+  }
+
+  let urlCheck = { status: "not_provided" };
+  if (Object.hasOwn(input, "url")) {
+    const result = runUrlCheck({ url: input.url });
+    const status = result.verdict === "reject" ? "block" : result.verdict === "requires_dns_resolution" ? "review" : "pass";
+    const reasons = result.verdict === "reject"
+      ? result.reasons.map((reason) => `url_${reason}`)
+      : result.verdict === "requires_dns_resolution" ? ["url_requires_dns_resolution"] : [];
+    record(status, ...reasons);
+    urlCheck = { status, reason_codes: reasons, ...result };
+  }
+
+  let payloadCheck = { status: "not_provided" };
+  if (Object.hasOwn(input, "payload")) {
+    const bounds = assertBoundedPayload(input.payload);
+    const validation = runValidate({ value: input.payload, schema: input.schema });
+    const status = validation.valid ? "pass" : "block";
+    const reasons = validation.valid ? [] : ["payload_schema_invalid"];
+    record(status, ...reasons);
+    payloadCheck = { status, reason_codes: reasons, bounds, validation };
+  }
+
+  let spendCheck = { status: "not_provided" };
+  if (Object.hasOwn(input, "spend")) {
+    const result = runSpendCheck(input.spend);
+    const status = result.allowed ? "pass" : "block";
+    const reasons = result.reason_codes.map((reason) => `spend_${reason}`);
+    record(status, ...reasons);
+    spendCheck = { ...result, status, policy_reason_codes: result.reason_codes, reason_codes: reasons };
+  }
+
+  const checks = {
+    action: {
+      status: actionStatus,
+      reason_codes: actionReasons,
+      normalization: summarizedNormalization(actionNormalization),
+      prompt_scan: actionPrompt,
+    },
+    prompt: promptCheck,
+    url: urlCheck,
+    payload: payloadCheck,
+    spend: spendCheck,
+  };
+  const decision = statuses.includes("block") ? "BLOCK" : statuses.includes("review") ? "REVIEW" : "ALLOW";
+  const stableReasonCodes = [...new Set(reasonCodes)].sort();
+  const receiptPayload = {
+    receipt_format: "goldkey-action-gate-v1",
+    request_sha256: request.sha256,
+    decision,
+    reason_codes: stableReasonCodes,
+    checks,
+  };
+  return {
+    decision,
+    reason_codes: stableReasonCodes,
+    checks,
+    request_sha256: request.sha256,
+    receipt_sha256: hashCanonical(receiptPayload).sha256,
+    receipt_format: receiptPayload.receipt_format,
+    receipt_canonicalization: "goldkey-c14n-v1",
+    receipt_hash_algorithm: "SHA-256",
+    receipt_preimage_fields: ["receipt_format", "request_sha256", "decision", "reason_codes", "checks"],
+    limitation: "Deterministic static checks only; ALLOW does not guarantee safety, authorization, successful execution, or future endpoint behavior.",
+  };
+}
+
 const implementations = {
   "json.canonicalize": runCanonicalize,
   "json.validate": runValidate,
@@ -327,6 +631,7 @@ const implementations = {
   "security.url_check": runUrlCheck,
   "policy.spend_check": runSpendCheck,
   "text.normalize": runNormalize,
+  "action.gate": runActionGate,
 };
 
 export function executeTool(name, input) {
@@ -335,6 +640,12 @@ export function executeTool(name, input) {
   const result = implementation(input);
   const inputHash = toolInputHash(name, input);
   return { tool: name, tool_version: VERSION, input_sha256: inputHash, result };
+}
+
+export function validateToolInput(name, input) {
+  const definition = TOOL_REGISTRY[name];
+  if (!definition) throw new ServiceError(404, "unknown_tool", `Unknown GoldKey tool: ${name}`);
+  return validateValueAgainstSchema(input, definition.input_schema, { cache: true });
 }
 
 export function toolInputHash(name, input) {

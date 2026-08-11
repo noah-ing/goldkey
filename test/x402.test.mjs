@@ -51,6 +51,7 @@ test("x402 binds payment and Bazaar discovery to the permanent public origin", (
     treasuryAddress: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b",
   });
   const route = routes["POST /v1/paygo/execute"];
+  const actionGateRoute = routes["POST /v1/action-gate"];
 
   assert.equal(route.resource, "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/paygo/execute");
   assert.deepEqual(route.accepts, [{
@@ -69,6 +70,7 @@ test("x402 binds payment and Bazaar discovery to the permanent public origin", (
     "security.url_check",
     "policy.spend_check",
     "text.normalize",
+    "action.gate",
   ];
   for (const toolName of toolNames) {
     assert.ok(route.description.includes(toolName), `${toolName} must be described for Bazaar discovery`);
@@ -82,5 +84,19 @@ test("x402 binds payment and Bazaar discovery to the permanent public origin", (
   assert.deepEqual(bodySchema.properties.input, { type: "object" });
   assert.equal(bodySchema.additionalProperties, false);
   assert.deepEqual(bodySchema.required, ["tool", "input"]);
-  assert.deepEqual(Object.keys(routes), ["POST /v1/paygo/execute"]);
+
+  assert.equal(actionGateRoute.resource, "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/action-gate");
+  assert.deepEqual(actionGateRoute.accepts, route.accepts);
+  assert.equal(actionGateRoute.serviceName, "GoldKey Action Gate");
+  assert.deepEqual(actionGateRoute.tags, ["ai-agent-security", "tool-call-preflight", "mcp-security", "prompt-injection", "ssrf", "spend-policy", "schema-validation", "receipt-hash"]);
+  assert.ok(actionGateRoute.description.length <= 500);
+  assert.match(actionGateRoute.description, /ALLOW, REVIEW, or BLOCK/);
+  assert.match(actionGateRoute.description, /request_sha256 and receipt_sha256/);
+  assert.match(actionGateRoute.description, /hashes are reproducible, not signatures/);
+  assert.match(actionGateRoute.description, /never executes the action/);
+  assert.match(actionGateRoute.description, /AI-agent tool-call preflight/);
+  assert.ok(actionGateRoute.extensions?.bazaar);
+  const actionGateBodySchema = actionGateRoute.extensions.bazaar.schema.properties.input.properties.body;
+  assert.deepEqual(actionGateBodySchema, TOOL_REGISTRY["action.gate"].input_schema);
+  assert.deepEqual(Object.keys(routes), ["POST /v1/paygo/execute", "POST /v1/action-gate"]);
 });

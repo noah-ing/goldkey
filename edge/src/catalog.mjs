@@ -1,5 +1,82 @@
 const VERSION = "1.0.0";
 const MAX_TEXT_LENGTH = 64 * 1024;
+const MAX_ACTION_NAME_LENGTH = 128;
+const MAX_ACTION_DESCRIPTION_LENGTH = 4096;
+const MAX_ACTION_UNTRUSTED_TEXT_LENGTH = 16 * 1024;
+
+const atomicStringSchema = { type: "string", pattern: "^(0|[1-9]\\d*)$", minLength: 1, maxLength: 78 };
+const shortStringSchema = { type: "string", minLength: 1, maxLength: 256 };
+
+export const ACTION_GATE_INPUT_SCHEMA = {
+  type: "object",
+  description: "One bounded proposed agent action plus only the evidence that Action Gate should evaluate. Omitted optional evidence is not checked.",
+  properties: {
+    action: {
+      type: "object",
+      description: "Declare the proposed action and its effect class. Action Gate never performs it.",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: MAX_ACTION_NAME_LENGTH, description: "Stable action name, such as fetch_vendor_quote or submit_payment." },
+        description: { type: "string", maxLength: MAX_ACTION_DESCRIPTION_LENGTH, description: "Optional human-readable action description; it is scanned as untrusted text." },
+        effect: { enum: ["read", "write", "network", "payment", "execute"], description: "Required effect class. Network requires url; payment requires spend; write and execute require payload plus schema to avoid an evidence-free ALLOW." },
+      },
+      required: ["name", "effect"],
+      additionalProperties: false,
+    },
+    untrusted_text: { type: "string", maxLength: MAX_ACTION_UNTRUSTED_TEXT_LENGTH, description: "Optional untrusted text to scan for prompt-injection, exfiltration, control-character, and bidi signals." },
+    url: { type: "string", maxLength: 4096, description: "Optional absolute URL for static scheme, credential, port, hostname, and direct-IP screening. No DNS lookup or fetch occurs." },
+    payload: { description: "Optional JSON payload proposed for a write or execution. When present, schema is required and both are bounded." },
+    schema: { type: "object", description: "Bounded local JSON Schema used to validate payload. Remote references and regular-expression keywords are rejected." },
+    spend: {
+      type: "object",
+      description: "Optional payment proposal and mandate evaluated in exact atomic units at the caller-supplied deterministic time.",
+      properties: {
+        proposal: {
+          type: "object",
+          properties: {
+            amount_atomic: { ...atomicStringSchema, description: "Canonical non-negative integer string in the asset's atomic units; never use decimal or exponent notation." },
+            asset: { ...shortStringSchema, description: "Exact asset identifier compared with mandate.allowed_assets." },
+            counterparty: { ...shortStringSchema, description: "Exact counterparty identifier, compared case-insensitively when the mandate lists counterparties." },
+          },
+          required: ["amount_atomic", "asset", "counterparty"],
+          additionalProperties: false,
+        },
+        mandate: {
+          type: "object",
+          properties: {
+            max_per_tx_atomic: { ...atomicStringSchema, description: "Per-transaction cap as a canonical atomic-unit integer string." },
+            max_period_atomic: { ...atomicStringSchema, description: "Period cap as a canonical atomic-unit integer string." },
+            spent_period_atomic: { ...atomicStringSchema, description: "Optional already-spent amount in the same period; defaults to zero." },
+            allowed_assets: {
+              type: "array",
+              minItems: 1,
+              maxItems: 100,
+              uniqueItems: true,
+              items: shortStringSchema,
+            },
+            allowed_counterparties: {
+              type: "array",
+              maxItems: 100,
+              uniqueItems: true,
+              items: shortStringSchema,
+            },
+            expires_at: { type: "string", format: "date-time", description: "Mandate expiry as an ISO 8601 date-time." },
+          },
+          required: ["max_per_tx_atomic", "max_period_atomic", "allowed_assets", "expires_at"],
+          additionalProperties: false,
+        },
+        now: { type: "string", format: "date-time", description: "Required caller-supplied ISO 8601 evaluation time; Action Gate never reads the server clock." },
+      },
+      required: ["proposal", "mandate", "now"],
+      additionalProperties: false,
+    },
+  },
+  required: ["action"],
+  dependentRequired: {
+    payload: ["schema"],
+    schema: ["payload"],
+  },
+  additionalProperties: false,
+};
 
 const definitions = [
   {
@@ -70,6 +147,11 @@ const definitions = [
       required: ["text"],
       additionalProperties: false,
     },
+  },
+  {
+    name: "action.gate",
+    description: "Deterministically evaluate a bounded proposed agent action across prompt, Unicode, URL, payload-schema, and spend-mandate checks, returning ALLOW, REVIEW, or BLOCK with a reproducible receipt hash.",
+    input_schema: ACTION_GATE_INPUT_SCHEMA,
   },
 ];
 

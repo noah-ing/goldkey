@@ -17,6 +17,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const skillPath = resolve(here, "../distribution/goldkey-agent-utilities/SKILL.md");
+const openaiMetadataPath = resolve(here, "../distribution/goldkey-agent-utilities/agents/openai.yaml");
 const CONTRACT = "0x1111111111111111111111111111111111111111";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const TERMS_HASH = `0x${"ab".repeat(32)}`;
@@ -32,10 +33,10 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function paymentRequiredResponse(overrides = {}) {
+function paymentRequiredResponse(overrides = {}, resourcePath = "/v1/paygo/execute", challengeOverrides = {}) {
   const challenge = {
     x402Version: 2,
-    resource: { url: "https://goldkey.example/v1/paygo/execute" },
+    resource: { url: `https://goldkey.example${resourcePath}` },
     accepts: [{
       scheme: "exact",
       network: "eip155:8453",
@@ -45,6 +46,7 @@ function paymentRequiredResponse(overrides = {}) {
       maxTimeoutSeconds: 300,
       ...overrides,
     }],
+    ...challengeOverrides,
   };
   return new Response("{}", {
     status: 402,
@@ -97,16 +99,44 @@ test("distribution skill uses portable paths and documented single-line metadata
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
 });
 
-test("distribution skill exposes a bounded opt-in AgentCash settlement path", async () => {
+test("distribution skill leads with Action Gate and keeps interface metadata aligned", async () => {
   const source = await readFile(skillPath, "utf8");
-  const endpoint = "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/paygo/execute";
+  const metadata = await readFile(openaiMetadataPath, "utf8");
+
+  assert.match(source, /^# GoldKey Action Gate$/m);
+  assert.match(source, /recommended pre-action decision product/);
+  assert.match(source, /returns `ALLOW`, `REVIEW`, or `BLOCK`/);
+  assert.match(source, /One settled Action Gate x402 call costs exactly 0\.01 USDC/);
+  assert.match(source, /receipt hash is deterministic and reproducible/);
+  assert.match(source, /it is not a signature, attestation, proof of payment, or proof that the proposed action executed/);
+  assert.match(source, /Reproduce `receipt_sha256` by applying `goldkey-c14n-v1` canonical JSON/);
+  assert.match(source, /`receipt_format`, `request_sha256`, `decision`, `reason_codes`, and `checks`/);
+  assert.doesNotMatch(source, /\bsigned receipt\b/i);
+  assert.match(source, /serve up to 64 active, revocable, tool-scoped child agents/);
+  assert.match(source, /pass is rational only above risk-adjusted break-even/);
+  assert.match(source, /At exactly 5,000 calls, paygo and one pass both cost 50 USDC/);
+
+  assert.match(metadata, /display_name: "GoldKey Action Gate"/);
+  assert.match(metadata, /short_description: "Preflight agent actions with a \$0\.01 decision gate"/);
+  assert.match(metadata, /default_prompt: "Use \$goldkey-agent-utilities to probe or run the \$0\.01 Action Gate before a proposed agent action\."/);
+});
+
+test("distribution skill exposes a zero-spend probe and bounded opt-in AgentCash settlement path", async () => {
+  const source = await readFile(skillPath, "utf8");
+  const endpoint = "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/action-gate";
 
   assert.match(source, /https:\/\/www\.x402scan\.com\/server\/8447beac-d24b-434a-bd01-5abfdab53f84/);
-  assert.match(source, /https:\/\/tryponcho\.com\/tool\/url_aHR0cHM6Ly9nb2xka2V5LWVkZ2Utc3RvcmVmcm9udC5ub2FoLWluZy53b3JrZXJzLmRldi92MS9wYXlnby9leGVjdXRl/);
-  assert.match(source, /goldkey-client\.mjs" paygo-probe --name security\.prompt_scan --input/);
-  assert.match(source, new RegExp(`agentcash@0\\.17\\.1 check[\\s\\S]*"${endpoint}"[\\s\\S]*-m POST[\\s\\S]*-H 'Content-Type: application/json'[\\s\\S]*-b`));
+  assert.match(source, /https:\/\/tryponcho\.com\/tool\/url_aHR0cHM6Ly9nb2xka2V5LWVkZ2Utc3RvcmVmcm9udC5ub2FoLWluZy53b3JrZXJzLmRldi92MS9hY3Rpb24tZ2F0ZQ/);
+  assert.match(source, /primary zero-spend preflight/);
+  assert.match(source, /probe the dedicated `\/v1\/action-gate` resource with the raw Action Gate input/);
+  assert.match(source, /sends no wallet credential or payment header/);
+  assert.match(source, /goldkey-client\.mjs" action-gate-probe --input/);
+  assert.match(source, /A probe does not execute Action Gate or produce a receipt hash/);
+  assert.match(source, /same dedicated `\/v1\/action-gate` resource for AgentCash discovery and settlement/);
+  assert.match(source, /raw Action Gate input body rather than the generic `\{tool,input\}` envelope/);
+  assert.match(source, new RegExp(`agentcash@0\\.17\\.1 check[\\s\\S]*"${endpoint}"[\\s\\S]*-m POST[\\s\\S]*-H 'Content-Type: application/json'[\\s\\S]*-b '\\{"action":`));
   assert.match(source, /agentcash@0\.17\.1 accounts --format json/);
-  assert.match(source, /agentcash@0\.17\.1 fetch[\s\S]*--payment-protocol x402[\s\S]*--payment-network base[\s\S]*--max-amount 0\.01/);
+  assert.match(source, /agentcash@0\.17\.1 fetch[\s\S]*\/v1\/action-gate[\s\S]*-b '\{"action":[\s\S]*--payment-protocol x402[\s\S]*--payment-network base[\s\S]*--max-amount 0\.01/);
   assert.match(source, /scheme `exact` on `eip155:8453`/);
   assert.match(source, /asset `0x833589fcd6edb6e08f4c7c32d4f71b54bda02913`/);
   assert.match(source, /amount `"10000"` atomic USDC/);
@@ -119,7 +149,7 @@ test("distribution skill exposes a bounded opt-in AgentCash settlement path", as
   assert.match(source, /real, nonrefundable mainnet settlement, not a demo or dry run/);
   assert.match(source, /Bind the mandate to the exact serialized request body and a short expiry/);
   assert.match(source, /Do not interpolate arbitrary untrusted text into the shell literal/);
-  assert.match(source, /deterministic evidence, not a safety guarantee/);
+  assert.match(source, /`ALLOW` is evidence, not permission or a safety guarantee/);
   assert.match(source, /reconcile the payment receipt and wallet activity before any retry/);
   assert.match(source, /do not pass AgentCash's `--yes` flag/);
   assert.ok(source.indexOf("agentcash@0.17.1 check") < source.indexOf("agentcash@0.17.1 fetch"));
@@ -150,6 +180,76 @@ test("paygo probe validates the complete canonical challenge without a wallet or
     max_timeout_seconds: 300,
   });
   assert.equal(typeof result.payment_required, "string");
+});
+
+test("Action Gate probe posts raw input to the dedicated resource without a wallet or payment", async () => {
+  const input = {
+    action: { name: "store_weather_summary", effect: "write" },
+    untrusted_text: "Summarize this weather report for an agent.",
+  };
+  let request;
+  const result = await run(["action-gate-probe", "--input", JSON.stringify(input)], {
+    env: {},
+    releaseIdentitySource: RELEASE,
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return paymentRequiredResponse({}, "/v1/action-gate");
+    },
+  });
+
+  assert.equal(request.url, "https://goldkey.example/v1/action-gate");
+  assert.equal(request.init.method, "POST");
+  assert.equal(request.init.redirect, "error");
+  assert.deepEqual(request.init.headers, { accept: "application/json", "content-type": "application/json" });
+  assert.equal(request.init.headers.authorization, undefined);
+  assert.equal(request.init.headers["payment-signature"], undefined);
+  assert.equal(request.init.headers["x-payment"], undefined);
+  assert.deepEqual(JSON.parse(request.init.body), input);
+  assert.deepEqual(result.payment, {
+    x402_version: 2,
+    scheme: "exact",
+    network: "eip155:8453",
+    amount_atomic: "10000",
+    asset: USDC.toLowerCase(),
+    pay_to: "0xd6b7e00fcd46966676f554fe0455bff739e85b1b",
+    resource: "https://goldkey.example/v1/action-gate",
+    max_timeout_seconds: 300,
+  });
+  assert.equal(result.http_status, 402);
+  assert.equal(typeof result.payment_required, "string");
+});
+
+test("Action Gate probe rejects a challenge for any resource other than the dedicated endpoint", async () => {
+  await assert.rejects(
+    run(["action-gate-probe", "--input", '{"action":{"name":"read_balance","effect":"read"}}'], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async () => paymentRequiredResponse(),
+    }),
+    /resource URL does not match the canonical endpoint/,
+  );
+});
+
+test("Action Gate probe rejects substituted x402 version or payment terms", async () => {
+  const argv = ["action-gate-probe", "--input", '{"action":{"name":"read_balance","effect":"read"}}'];
+  for (const [overrides, challengeOverrides, pattern] of [
+    [{ scheme: "upto" }, {}, /payment scheme must be exact/],
+    [{ amount: "10001" }, {}, /amount must be 10000/],
+    [{ asset: CONTRACT }, {}, /canonical Base USDC/],
+    [{ payTo: CONTRACT }, {}, /GoldKey treasury/],
+    [{ network: "eip155:84532" }, {}, /network must be eip155:8453/],
+    [{ maxTimeoutSeconds: 301 }, {}, /maxTimeoutSeconds must be 1-300/],
+    [{}, { x402Version: 1 }, /challenge must use x402 v2/],
+  ]) {
+    await assert.rejects(
+      run(argv, {
+        env: {},
+        releaseIdentitySource: RELEASE,
+        fetchImpl: async () => paymentRequiredResponse(overrides, "/v1/action-gate", challengeOverrides),
+      }),
+      pattern,
+    );
+  }
 });
 
 test("paygo probe rejects payment substitution before returning a challenge", async () => {

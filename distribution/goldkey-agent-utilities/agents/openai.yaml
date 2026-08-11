@@ -1,4 +1,4 @@
 interface:
-  display_name: "GoldKey Agent Utilities"
-  short_description: "Evaluate and use GoldKey deterministic APIs"
-  default_prompt: "Use $goldkey-agent-utilities to compare GoldKey pass economics and call an appropriate deterministic utility."
+  display_name: "GoldKey Action Gate"
+  short_description: "Preflight agent actions with a $0.01 decision gate"
+  default_prompt: "Use $goldkey-agent-utilities to probe or run the $0.01 Action Gate before a proposed agent action."

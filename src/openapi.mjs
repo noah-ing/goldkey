@@ -285,6 +285,67 @@ function renewalResponseSchema() {
   };
 }
 
+function actionGateResponseSchema() {
+  const sha256Schema = { type: "string", pattern: "^[0-9a-f]{64}$" };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"],
+    properties: {
+      request_id: { type: "string", minLength: 1, maxLength: 128 },
+      tool: { const: "action.gate" },
+      tool_version: { const: "1.0.0" },
+      input_sha256: sha256Schema,
+      result: {
+        type: "object",
+        additionalProperties: false,
+        required: ["decision", "reason_codes", "checks", "request_sha256", "receipt_sha256", "receipt_format", "receipt_canonicalization", "receipt_hash_algorithm", "receipt_preimage_fields", "limitation"],
+        properties: {
+          decision: { enum: ["ALLOW", "REVIEW", "BLOCK"] },
+          reason_codes: { type: "array", uniqueItems: true, items: { type: "string" } },
+          checks: {
+            type: "object",
+            additionalProperties: false,
+            required: ["action", "prompt", "url", "payload", "spend"],
+            properties: {
+              action: { type: "object" },
+              prompt: { type: "object" },
+              url: { type: "object" },
+              payload: { type: "object" },
+              spend: { type: "object" },
+            },
+          },
+          request_sha256: sha256Schema,
+          receipt_sha256: {
+            ...sha256Schema,
+            description: "SHA-256 of the UTF-8 goldkey-c14n-v1 canonical JSON object containing exactly receipt_format, request_sha256, decision, reason_codes, and checks. This reproducible digest is not a cryptographic signature.",
+          },
+          receipt_format: { const: "goldkey-action-gate-v1" },
+          receipt_canonicalization: { const: "goldkey-c14n-v1" },
+          receipt_hash_algorithm: { const: "SHA-256" },
+          receipt_preimage_fields: { const: ["receipt_format", "request_sha256", "decision", "reason_codes", "checks"] },
+          limitation: { type: "string" },
+        },
+      },
+      payment: {
+        type: "object",
+        additionalProperties: false,
+        required: ["protocol", "charged_usdc"],
+        properties: { protocol: { const: "x402" }, charged_usdc: { const: "0.01" } },
+      },
+      upgrade: {
+        type: "object",
+        additionalProperties: false,
+        required: ["quote_url", "break_even_calls"],
+        properties: {
+          quote_url: { type: "string", format: "uri" },
+          break_even_calls: { const: 5000 },
+        },
+      },
+    },
+  };
+}
+
 export function buildOpenApi(config) {
   const toolNames = Object.keys(TOOL_REGISTRY);
   return {
@@ -292,7 +353,7 @@ export function buildOpenApi(config) {
     info: {
       title: "GoldKey Agent Utility API",
       version: "1.0.0",
-      description: "Deterministic utilities sold at 0.01 USDC per x402 call or through a transferable 10,000-call GoldKey term. The 500,000-USDC figure is the primary-mint gross cap, not a total-revenue cap or forecast.",
+      description: "Seven deterministic utilities sold at 0.01 USDC per x402 call or through a transferable 10,000-call GoldKey term. The 500,000-USDC figure is the primary-mint gross cap, not a total-revenue cap or forecast.",
     },
     servers: [{ url: config.publicOrigin }],
     paths: {
@@ -401,7 +462,7 @@ export function buildOpenApi(config) {
       "/v1/paygo/execute": {
         post: {
           operationId: "goldkey_paygo_execute",
-          description: "Execute one independent 0.01-USDC x402 purchase. The route checks the tool name and request shape before payment verification. After verification, it fully validates and executes the tool, buffers the result, settles payment, and releases the result only after successful settlement. A handler error cancels settlement. This route does not use GoldKey quota or NFT idempotency; retrying a settled request is another purchase.",
+          description: "Execute one independent 0.01-USDC x402 purchase. The route validates a fixed bounded envelope before payment verification, performs the potentially expensive deterministic tool work only after verification, buffers the result, and releases it only after successful settlement. A handler error cancels settlement. This route does not use GoldKey quota or NFT idempotency; retrying a settled request is another purchase.",
           requestBody: {
             required: true,
             content: {
@@ -420,8 +481,33 @@ export function buildOpenApi(config) {
           },
           responses: {
             200: { description: "Settled paid result" },
-            400: { description: "Malformed tool name or input; payment is not requested by the service" },
+            400: { description: "Malformed envelopes are rejected before verification; semantic tool errors after verification cancel settlement" },
             402: { description: "Payment required, invalid, or unsuccessful; tool result is not returned" },
+            503: { description: "Paygo is disabled on this deployment" },
+          },
+        },
+      },
+      "/v1/action-gate": {
+        post: {
+          operationId: "goldkey_action_gate",
+          summary: "$0.01 AI-agent tool-call preflight: return ALLOW, REVIEW, or BLOCK before an MCP/tool call, payment, fetch, message, write, or execution.",
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: "0.01" },
+            protocols: [{ x402: {} }],
+          },
+          description: "Return one ALLOW, REVIEW, or BLOCK decision before an agent fetches, pays, calls a tool, sends content, or stores data. Action Gate combines prompt-injection and hidden-Unicode checks, static URL screening, payload-schema validation, and spend-mandate enforcement. It never executes the proposed action. The fixed bounded envelope is validated before payment verification; full evaluation runs only after verification, and the buffered result is released only after successful x402 settlement. One successful request is one 0.01-USDC execution. receipt_sha256 is a reproducible digest, not a cryptographic signature.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ActionGateRequest" } } },
+          },
+          responses: {
+            200: {
+              description: "Settled deterministic Action Gate decision and reproducible receipt hash",
+              content: { "application/json": { schema: { $ref: "#/components/schemas/ActionGateResponse" } } },
+            },
+            400: { description: "Malformed envelopes are rejected before verification; semantic evaluation errors after verification cancel settlement" },
+            402: { description: "Payment required, invalid, or unsuccessful; Action Gate result is not returned" },
+            413: { description: "Bounded request, payload, schema, or evidence limit exceeded; settlement is cancelled" },
             503: { description: "Paygo is disabled on this deployment" },
           },
         },
@@ -439,6 +525,8 @@ export function buildOpenApi(config) {
         RenewalResponse: renewalResponseSchema(),
         AuthChallengeRequest: authChallengeRequestSchema(),
         AuthVerifyRequest: authVerifyRequestSchema(),
+        ActionGateRequest: TOOL_REGISTRY["action.gate"].input_schema,
+        ActionGateResponse: actionGateResponseSchema(),
       },
     },
   };

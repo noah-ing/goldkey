@@ -1,4 +1,4 @@
-import { TOOL_NAMES } from "./catalog.mjs";
+import { ACTION_GATE_INPUT_SCHEMA, TOOL_NAMES } from "./catalog.mjs";
 
 const money = {
   type: "string",
@@ -164,6 +164,67 @@ function paygoResponseSchema() {
   };
 }
 
+function actionGateResponseSchema() {
+  const sha256Schema = { type: "string", pattern: "^[0-9a-f]{64}$" };
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"],
+    properties: {
+      request_id: { type: "string", minLength: 1, maxLength: 128 },
+      tool: { const: "action.gate" },
+      tool_version: { const: "1.0.0" },
+      input_sha256: sha256Schema,
+      result: {
+        type: "object",
+        additionalProperties: false,
+        required: ["decision", "reason_codes", "checks", "request_sha256", "receipt_sha256", "receipt_format", "receipt_canonicalization", "receipt_hash_algorithm", "receipt_preimage_fields", "limitation"],
+        properties: {
+          decision: { enum: ["ALLOW", "REVIEW", "BLOCK"] },
+          reason_codes: { type: "array", uniqueItems: true, items: { type: "string" } },
+          checks: {
+            type: "object",
+            additionalProperties: false,
+            required: ["action", "prompt", "url", "payload", "spend"],
+            properties: {
+              action: { type: "object" },
+              prompt: { type: "object" },
+              url: { type: "object" },
+              payload: { type: "object" },
+              spend: { type: "object" },
+            },
+          },
+          request_sha256: sha256Schema,
+          receipt_sha256: {
+            ...sha256Schema,
+            description: "SHA-256 of the UTF-8 goldkey-c14n-v1 canonical JSON object containing exactly receipt_format, request_sha256, decision, reason_codes, and checks. This reproducible digest is not a cryptographic signature.",
+          },
+          receipt_format: { const: "goldkey-action-gate-v1" },
+          receipt_canonicalization: { const: "goldkey-c14n-v1" },
+          receipt_hash_algorithm: { const: "SHA-256" },
+          receipt_preimage_fields: { const: ["receipt_format", "request_sha256", "decision", "reason_codes", "checks"] },
+          limitation: { type: "string" },
+        },
+      },
+      payment: {
+        type: "object",
+        additionalProperties: false,
+        required: ["protocol", "charged_usdc"],
+        properties: { protocol: { const: "x402" }, charged_usdc: { const: "0.01" } },
+      },
+      upgrade: {
+        type: "object",
+        additionalProperties: false,
+        required: ["quote_url", "break_even_calls"],
+        properties: {
+          quote_url: { type: "string", format: "uri" },
+          break_even_calls: { const: 5000 },
+        },
+      },
+    },
+  };
+}
+
 function renewalRequestSchema() {
   return {
     type: "object",
@@ -220,7 +281,7 @@ export function buildOpenApi(config) {
       title: "GoldKey Agent Utility API",
       version: "1.0.0",
       description: "Always-on edge discovery and Base-RPC-backed commerce for a 50-USDC transferable 10,000-call, 365-day utility pass. Stateful authentication, quota, credentials, and tool fulfillment may cold-start at the origin. The 500,000-USDC figure is only the fixed primary-mint gross cap, not a forecast or total-revenue cap.",
-      "x-guidance": "Use POST /v1/paygo/execute for deterministic JSON canonicalization or validation, prompt-injection signal scanning, static URL screening, spend-mandate evaluation, or Unicode normalization. Send tool and input as JSON. An unpaid request returns an x402 challenge for exactly 0.01 USDC on Base; pay and retry once. Use /v1/purchase/quote only to compare measured annual demand with the 50-USDC pass.",
+      "x-guidance": "Use POST /v1/action-gate for one deterministic preflight decision across proposed action text, untrusted text, URL, payload schema, and spend mandate. Use POST /v1/paygo/execute for Action Gate or any of the six individual deterministic utilities. An unpaid request returns an x402 challenge for exactly 0.01 USDC on Base; pay and retry once. Use /v1/purchase/quote only to compare measured annual demand with the 50-USDC pass.",
     },
     servers: [{ url: config.publicOrigin }],
     tags: [
@@ -316,14 +377,28 @@ export function buildOpenApi(config) {
       "/v1/paygo/execute": {
         post: {
           tags: ["origin"], operationId: "goldkey_paygo_execute",
-          summary: "$0.01-USDC Base x402 access to six deterministic tools: JSON canonicalization (json.canonicalize), bounded JSON Schema validation (json.validate), prompt-injection and exfiltration signal scanning (security.prompt_scan), static unsafe-URL screening (security.url_check), atomic spend-mandate evaluation (policy.spend_check), and Unicode normalization with optional control/bidi removal (text.normalize).",
+          summary: "$0.01-USDC Base x402 access to seven deterministic tools: JSON canonicalization (json.canonicalize), bounded JSON Schema validation (json.validate), prompt-injection and exfiltration signal scanning (security.prompt_scan), static unsafe-URL screening (security.url_check), atomic spend-mandate evaluation (policy.spend_check), Unicode normalization with optional control/bidi removal (text.normalize), and composite pre-action gating (action.gate).",
           "x-payment-info": {
             price: { mode: "fixed", currency: "USD", amount: "0.01" },
             protocols: [{ x402: {} }],
           },
-          ...proxied("For $0.01 USDC per x402 call on Base, execute one of six deterministic utilities: json.canonicalize creates stable JSON serialization and a SHA-256 hash before signing or comparing structured data; json.validate checks data against a bounded JSON Schema 2020-12 subset before accepting agent output; security.prompt_scan returns prompt-injection and exfiltration signals with evidence spans for untrusted text; security.url_check statically screens unsafe schemes, credentials, ports, and direct private or reserved hosts before fetch; policy.spend_check evaluates atomic-unit payment proposals against mandate caps before authorization; text.normalize normalizes Unicode and can strip control or bidirectional-formatting characters before comparison or storage. Submit one tool and its matching input. Each call is an independent purchase: the origin validates the envelope before payment verification, buffers a fully validated tool result, settles payment, and only then releases the result; failed validation or settlement does not return a tool result. A successfully settled retry is a new purchase.", {
+          ...proxied("For $0.01 USDC per x402 call on Base, execute one of seven deterministic utilities: json.canonicalize creates stable JSON serialization and a SHA-256 hash before signing or comparing structured data; json.validate checks data against a bounded JSON Schema 2020-12 subset before accepting agent output; security.prompt_scan returns prompt-injection and exfiltration signals with evidence spans for untrusted text; security.url_check statically screens unsafe schemes, credentials, ports, and direct private or reserved hosts before fetch; policy.spend_check evaluates atomic-unit payment proposals against mandate caps before authorization; text.normalize normalizes Unicode and can strip control or bidirectional-formatting characters before comparison or storage; action.gate combines applicable prompt, Unicode, URL, payload-schema, and spend-mandate checks into one ALLOW, REVIEW, or BLOCK decision with stable reason codes and a reproducible receipt hash. Submit one tool and its matching input. Each call is an independent purchase: the origin validates a fixed bounded envelope before payment verification, performs the potentially expensive tool work only after verification, buffers the result, settles payment, and only then releases it; failed evaluation or settlement does not return a tool result. A successfully settled retry is a new purchase.", {
             requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["tool", "input"], properties: { tool: { type: "string", enum: TOOL_NAMES }, input: jsonObject } } } } },
-            responses: { 200: { description: "Settled paid result", content: { "application/json": { schema: { $ref: "#/components/schemas/PaygoResponse" } } } }, 400: { description: "Malformed request before payment" }, 402: { description: "Payment Required" }, 503: { description: "Paygo disabled" }, 502: { description: "Origin unavailable" } },
+            responses: { 200: { description: "Settled paid result", content: { "application/json": { schema: { $ref: "#/components/schemas/PaygoResponse" } } } }, 400: { description: "Malformed envelope before verification or semantic tool error after verification; no settlement occurs" }, 402: { description: "Payment Required" }, 503: { description: "Paygo disabled" }, 502: { description: "Origin unavailable" } },
+          }),
+        },
+      },
+      "/v1/action-gate": {
+        post: {
+          tags: ["origin"], operationId: "goldkey_action_gate",
+          summary: "$0.01 AI-agent tool-call preflight: return ALLOW, REVIEW, or BLOCK before an MCP/tool call, payment, fetch, message, write, or execution.",
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: "0.01" },
+            protocols: [{ x402: {} }],
+          },
+          ...proxied("For $0.01 USDC per x402 call on Base, evaluate one bounded proposed agent action across applicable prompt-injection, hidden-Unicode, static URL, payload-schema, and spend-mandate checks. The result is ALLOW, REVIEW, or BLOCK with stable reason codes, per-check evidence, and deterministic request and receipt SHA-256 hashes. Action Gate does not execute the proposed action, perform network I/O or DNS resolution, or guarantee safety. The origin validates a fixed bounded envelope before payment verification, performs full evaluation only after verification, buffers the result, settles payment, and only then releases it; failed evaluation or settlement does not return an Action Gate result. A successfully settled retry is a new purchase.", {
+            requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ActionGateInput" } } } },
+            responses: { 200: { description: "Settled Action Gate result", content: { "application/json": { schema: { $ref: "#/components/schemas/ActionGateResponse" } } } }, 400: { description: "Malformed request or failed Action Gate evaluation; no settlement occurs" }, 402: { description: "Payment Required" }, 503: { description: "Paygo disabled" }, 502: { description: "Origin unavailable" } },
           }),
         },
       },
@@ -336,6 +411,8 @@ export function buildOpenApi(config) {
         RenewalRequest: renewalRequestSchema(),
         AuthChallengeRequest: authChallengeRequestSchema(),
         AuthVerifyRequest: authVerifyRequestSchema(),
+        ActionGateInput: ACTION_GATE_INPUT_SCHEMA,
+        ActionGateResponse: actionGateResponseSchema(),
         PaygoResponse: paygoResponseSchema(),
       },
     },

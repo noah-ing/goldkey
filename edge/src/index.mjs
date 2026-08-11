@@ -55,6 +55,7 @@ function proxyRoute(pathname, method) {
     ["/v1/quota", ["GET"]],
     ["/v1/keys", ["GET", "POST", "DELETE"]],
     ["/v1/paygo/execute", ["POST"]],
+    ["/v1/action-gate", ["POST"]],
   ]);
   const exact = allowed.get(pathname);
   if (exact) return { known: true, allowed: exact.includes(method) };

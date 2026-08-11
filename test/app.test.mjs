@@ -8,12 +8,13 @@ import { loadConfig } from "../src/config.mjs";
 import { GoldKeyDatabase } from "../src/database.mjs";
 
 const OWNER = getAddress("0x000000000000000000000000000000000000dEaD");
+const PUBLIC_ORIGIN = "http://127.0.0.1:8402";
 
 async function fixture(t, overrides = {}) {
   const config = loadConfig({
     nodeEnv: "test",
     port: 8402,
-    publicOrigin: "http://127.0.0.1:8402",
+    publicOrigin: PUBLIC_ORIGIN,
     databasePath: ":memory:",
     chainId: 8453,
     rpcUrl: "http://unused",
@@ -134,16 +135,19 @@ test("commerce endpoint sells only above break-even and disabled paygo never lea
   const paygo = await json(await fetch(`${base}/v1/paygo/execute`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool: "json.canonicalize", input: { value: 1 } }) }));
   assert.equal(paygo.response.status, 503);
   assert.equal(paygo.body.error.code, "paygo_disabled");
+  const actionGate = await json(await fetch(`${base}/v1/action-gate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: { name: "read account balance", effect: "read" } }) }));
+  assert.equal(actionGate.response.status, 503);
+  assert.equal(actionGate.body.error.code, "paygo_disabled");
 });
 
-test("x402 discovery probes reach the challenge while malformed paid requests fail first", async (t) => {
+test("x402 discovery probes and semantic work remain behind payment verification", async (t) => {
   let challenges = 0;
   const x402Middleware = (req, res, next) => {
     if (req.method !== "POST" || req.path !== "/v1/paygo/execute") return next();
     challenges += 1;
     res
       .status(402)
-      .set("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, extensions: { bazaar: {} } })).toString("base64"))
+      .set("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: `${PUBLIC_ORIGIN}/v1/paygo/execute` }, extensions: { bazaar: {} } })).toString("base64"))
       .json({});
   };
   const { base } = await fixture(t, { x402Enabled: true, x402Middleware });
@@ -194,13 +198,147 @@ test("x402 discovery probes reach the challenge while malformed paid requests fa
   assert.equal(unknown.body.error.code, "unknown_tool");
   assert.equal(challenges, 2);
 
+  const malformedToolInput = await json(await fetch(`${base}/v1/paygo/execute`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "invalid-payment" },
+    body: JSON.stringify({ tool: "security.url_check", input: { url: "not-an-absolute-url" } }),
+  }));
+  assert.equal(malformedToolInput.response.status, 402);
+  assert.ok(malformedToolInput.response.headers.get("payment-required"));
+  assert.equal(challenges, 3);
+
   const validUnpaid = await fetch(`${base}/v1/paygo/execute`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ tool: "json.canonicalize", input: { value: 1 } }),
   });
   assert.equal(validUnpaid.status, 402);
-  assert.equal(challenges, 3);
+  assert.equal(challenges, 4);
+});
+
+test("dedicated Action Gate validates a bounded envelope before x402 and evaluates after verification", async (t) => {
+  let middlewareCalls = 0;
+  const x402Middleware = (req, res, next) => {
+    if (req.method !== "POST" || req.path !== "/v1/action-gate") return next();
+    middlewareCalls += 1;
+    if (req.get("payment-signature") === "accepted") return next();
+    res
+      .status(402)
+      .set("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: `${PUBLIC_ORIGIN}/v1/action-gate` }, extensions: { bazaar: {} } })).toString("base64"))
+      .json({});
+  };
+  const { base } = await fixture(t, { x402Enabled: true, x402Middleware });
+
+  for (const probeOptions of [
+    { method: "POST" },
+    { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+  ]) {
+    const probe = await fetch(`${base}/v1/action-gate`, probeOptions);
+    assert.equal(probe.status, 402);
+    const challenge = JSON.parse(Buffer.from(probe.headers.get("payment-required"), "base64").toString("utf8"));
+    assert.equal(challenge.resource.url, `${PUBLIC_ORIGIN}/v1/action-gate`);
+  }
+  assert.equal(middlewareCalls, 2);
+
+  for (const paymentHeader of ["payment-signature", "x-payment"]) {
+    const malformed = await json(await fetch(`${base}/v1/action-gate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", [paymentHeader]: "invalid-payment" },
+      body: "{}",
+    }));
+    assert.equal(malformed.response.status, 400);
+    assert.equal(malformed.body.error.code, "invalid_action_gate_input");
+    assert.equal(malformed.response.headers.get("payment-required"), null);
+  }
+
+  const invalidComposite = await json(await fetch(`${base}/v1/action-gate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "invalid-payment" },
+    body: JSON.stringify({ action: { name: "store record", effect: "write" }, payload: { id: 1 } }),
+  }));
+  assert.equal(invalidComposite.response.status, 400);
+  assert.equal(invalidComposite.body.error.code, "invalid_action_gate_input");
+
+  const invalidUrl = await json(await fetch(`${base}/v1/action-gate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "invalid-payment" },
+    body: JSON.stringify({ action: { name: "fetch quote", effect: "network" }, url: "not-an-absolute-url" }),
+  }));
+  assert.equal(invalidUrl.response.status, 402);
+  assert.ok(invalidUrl.response.headers.get("payment-required"));
+  assert.equal(middlewareCalls, 3);
+
+  const verifiedInvalidUrl = await json(await fetch(`${base}/v1/action-gate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "accepted" },
+    body: JSON.stringify({ action: { name: "fetch quote", effect: "network" }, url: "not-an-absolute-url" }),
+  }));
+  assert.equal(verifiedInvalidUrl.response.status, 400);
+  assert.equal(verifiedInvalidUrl.body.error.code, "malformed_url");
+  assert.equal(middlewareCalls, 4);
+
+  const validInput = {
+    action: { name: "submit approved vendor payment", effect: "payment" },
+    spend: {
+      proposal: { amount_atomic: "1000000", asset: "USDC", counterparty: "vendor-17" },
+      mandate: {
+        max_per_tx_atomic: "5000000",
+        max_period_atomic: "20000000",
+        spent_period_atomic: "2000000",
+        allowed_assets: ["USDC"],
+        allowed_counterparties: ["vendor-17"],
+        expires_at: "2099-01-01T00:00:00.000Z",
+      },
+      now: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const validUnpaid = await fetch(`${base}/v1/action-gate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(validInput),
+  });
+  assert.equal(validUnpaid.status, 402);
+  assert.equal(middlewareCalls, 5);
+
+  const paid = await json(await fetch(`${base}/v1/action-gate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "accepted" },
+    body: JSON.stringify(validInput),
+  }));
+  assert.equal(paid.response.status, 200);
+  assert.equal(middlewareCalls, 6);
+  assert.equal(paid.body.tool, "action.gate");
+  assert.equal(paid.body.result.decision, "ALLOW");
+  assert.match(paid.body.result.receipt_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(paid.body.result.receipt_format, "goldkey-action-gate-v1");
+  assert.equal(paid.body.result.receipt_canonicalization, "goldkey-c14n-v1");
+  assert.equal(paid.body.result.receipt_hash_algorithm, "SHA-256");
+  assert.deepEqual(paid.body.result.receipt_preimage_fields, ["receipt_format", "request_sha256", "decision", "reason_codes", "checks"]);
+  assert.equal(paid.body.payment.charged_usdc, "0.01");
+  assert.equal(Object.hasOwn(paid.body.result, "signature"), false);
+});
+
+test("Action Gate is first-class in OpenAPI and the fixed demo", async (t) => {
+  const { base } = await fixture(t);
+  const openapi = await json(await fetch(`${base}/openapi.json`));
+  assert.equal(openapi.response.status, 200);
+  const actionOperation = openapi.body.paths["/v1/action-gate"].post;
+  assert.equal(actionOperation.operationId, "goldkey_action_gate");
+  assert.match(actionOperation.summary, /\$0\.01 AI-agent tool-call preflight/);
+  assert.match(actionOperation.description, /not a cryptographic signature/);
+  assert.deepEqual(actionOperation["x-payment-info"], {
+    price: { mode: "fixed", currency: "USD", amount: "0.01" },
+    protocols: [{ x402: {} }],
+  });
+  assert.deepEqual(openapi.body.components.schemas.ActionGateResponse.properties.result.properties.decision.enum, ["ALLOW", "REVIEW", "BLOCK"]);
+  assert.deepEqual(openapi.body.components.schemas.ActionGateRequest.properties.action.required, ["name", "effect"]);
+
+  const demo = await json(await fetch(`${base}/v1/demo`));
+  const example = demo.body.examples.find(({ tool }) => tool === "action.gate");
+  assert.equal(demo.body.free_fixed_examples, true);
+  assert.equal(example.result.decision, "ALLOW");
+  assert.match(example.result.receipt_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(example.result.receipt_canonicalization, "goldkey-c14n-v1");
 });
 
 test("terms, schema, and renewal quotes are machine-readable", async (t) => {
