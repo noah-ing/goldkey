@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
   RELEASE_IDENTITY_SOURCE,
+  isDirectExecution,
   resolveRuntimeConfig,
   run,
   runCli,
@@ -71,6 +72,22 @@ test("distribution skill uses portable paths and documented single-line metadata
   const metadata = JSON.parse(metadataLines[0].slice("metadata: ".length));
   assert.deepEqual(metadata.openclaw.requires.bins, ["node"]);
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
+});
+
+test("client recognizes direct execution through a symlinked install path", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "goldkey-entrypoint-"));
+  const realDirectory = join(directory, "real");
+  const linkedDirectory = join(directory, "linked");
+  const entry = join(realDirectory, "goldkey-client.mjs");
+  const linkedEntry = join(linkedDirectory, "goldkey-client.mjs");
+  try {
+    await mkdir(realDirectory);
+    await writeFile(entry, "// entry\n", { encoding: "utf8", flag: "wx" });
+    await symlink(realDirectory, linkedDirectory, "dir");
+    assert.equal(await isDirectExecution(pathToFileURL(entry).href, linkedEntry), true);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("published release pins the verified mainnet identity", async () => {

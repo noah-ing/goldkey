@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { open, unlink } from "node:fs/promises";
+import { open, realpath, unlink } from "node:fs/promises";
 import { isAbsolute } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MAINNET_CHAIN_ID = 8453;
 const BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -472,7 +472,20 @@ export async function runCli(argv, options = {}) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+export async function isDirectExecution(moduleUrl, argvPath, { realpathImpl = realpath } = {}) {
+  if (!argvPath) return false;
+  try {
+    const [modulePath, entryPath] = await Promise.all([
+      realpathImpl(fileURLToPath(moduleUrl)),
+      realpathImpl(argvPath),
+    ]);
+    return modulePath === entryPath;
+  } catch {
+    return moduleUrl === pathToFileURL(argvPath).href;
+  }
+}
+
+if (await isDirectExecution(import.meta.url, process.argv[1])) {
   runCli(process.argv.slice(2))
     .then((result) => {
       if (result?.help) process.stdout.write(`${result.help}\n`);
