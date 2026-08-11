@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { TOOL_REGISTRY } from "../src/tools.mjs";
 import { assertFacilitatorSupport, buildX402Routes, validateX402Facilitator } from "../src/x402.mjs";
 
 const config = Object.freeze({ chainId: 8453, x402Enabled: true });
@@ -60,6 +61,26 @@ test("x402 binds payment and Bazaar discovery to the permanent public origin", (
   }]);
   assert.equal(route.serviceName, "GoldKey Agent Utilities");
   assert.deepEqual(route.tags, ["agent-security", "json-validation", "prompt-injection", "url-safety", "spend-policy"]);
-  assert.match(route.description, /prompt-injection scanning/);
+  assert.ok(route.description.length <= 500);
+  const toolNames = [
+    "json.canonicalize",
+    "json.validate",
+    "security.prompt_scan",
+    "security.url_check",
+    "policy.spend_check",
+    "text.normalize",
+  ];
+  for (const toolName of toolNames) {
+    assert.ok(route.description.includes(toolName), `${toolName} must be described for Bazaar discovery`);
+  }
+  assert.match(route.description, /0\.01 USDC on Base/);
   assert.ok(route.extensions?.bazaar);
+
+  const bodySchema = route.extensions.bazaar.schema.properties.input.properties.body;
+  assert.deepEqual(Object.keys(TOOL_REGISTRY), toolNames);
+  assert.deepEqual(bodySchema.properties.tool, { type: "string", enum: toolNames });
+  assert.deepEqual(bodySchema.properties.input, { type: "object" });
+  assert.equal(bodySchema.additionalProperties, false);
+  assert.deepEqual(bodySchema.required, ["tool", "input"]);
+  assert.deepEqual(Object.keys(routes), ["POST /v1/paygo/execute"]);
 });

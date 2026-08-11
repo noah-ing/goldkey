@@ -125,10 +125,67 @@ async function body(response) {
   return response.json();
 }
 
+function collectRefs(value, refs = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectRefs(item, refs);
+  } else if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "$ref") refs.push(item);
+      else collectRefs(item, refs);
+    }
+  }
+  return refs;
+}
+
+function resolveLocalRef(document, ref) {
+  return ref.slice(2).split("/").reduce((value, segment) => value?.[segment.replaceAll("~1", "/").replaceAll("~0", "~")], document);
+}
+
 test("deployed static artifacts are byte-identical to canonical terms and schema", () => {
   assert.deepEqual(termsAsset, readFileSync(`${PACKAGE_ROOT}/TERMS.md`));
   assert.deepEqual(schemaAsset, readFileSync(`${PACKAGE_ROOT}/agent/goldkey-commerce-response.schema.json`));
   assert.equal(JSON.parse(schemaAsset).$id, "urn:goldkey:schema:commerce-response:v1");
+});
+
+test("domain skill discovery serves only the exact index and integrity-pinned archive paths", async () => {
+  const indexAsset = readFileSync(`${EDGE_ROOT}/public/.well-known/agent-skills/index.json`);
+  const archiveAsset = readFileSync(`${EDGE_ROOT}/public/.well-known/agent-skills/goldkey-agent-utilities.tar.gz`);
+  const assetRequests = [];
+  const skillAssets = {
+    async fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      assetRequests.push(pathname);
+      if (pathname === "/.well-known/agent-skills/index.json") return new Response(indexAsset);
+      if (pathname === "/.well-known/agent-skills/goldkey-agent-utilities.tar.gz") return new Response(archiveAsset);
+      return new Response("not found", { status: 404 });
+    },
+  };
+  const worker = createWorker();
+  const indexResponse = await worker.fetch(
+    new Request("https://edge.example/.well-known/agent-skills/index.json"),
+    env({ ASSETS: skillAssets }),
+  );
+  assert.equal(indexResponse.status, 200);
+  assert.match(indexResponse.headers.get("content-type"), /^application\/json/);
+  assert.deepEqual(Buffer.from(await indexResponse.arrayBuffer()), indexAsset);
+
+  const archiveResponse = await worker.fetch(
+    new Request("https://edge.example/.well-known/agent-skills/goldkey-agent-utilities.tar.gz"),
+    env({ ASSETS: skillAssets }),
+  );
+  assert.equal(archiveResponse.status, 200);
+  assert.equal(archiveResponse.headers.get("content-type"), "application/gzip");
+  assert.deepEqual(Buffer.from(await archiveResponse.arrayBuffer()), archiveAsset);
+
+  const nearMiss = await worker.fetch(
+    new Request("https://edge.example/.well-known/agent-skills/unlisted.tar.gz"),
+    env({ ASSETS: skillAssets }),
+  );
+  assert.equal(nearMiss.status, 404);
+  assert.deepEqual(assetRequests, [
+    "/.well-known/agent-skills/index.json",
+    "/.well-known/agent-skills/goldkey-agent-utilities.tar.gz",
+  ]);
 });
 
 test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch a network", async () => {
@@ -146,7 +203,24 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(health.storefront, "ready");
   assert.equal(health.origin_checked, false);
   const openapi = await body(await worker.fetch(new Request("https://edge.example/openapi.json"), env()));
-  assert.equal(openapi.paths["/v1/paygo/execute"].post.tags[0], "origin");
+  const paygo = openapi.paths["/v1/paygo/execute"].post;
+  assert.equal(paygo.tags[0], "origin");
+  assert.match(openapi.info["x-guidance"], /POST \/v1\/paygo\/execute/);
+  assert.match(openapi.info["x-guidance"], /0\.01 USDC/);
+  assert.deepEqual(paygo["x-payment-info"], {
+    price: { mode: "fixed", currency: "USD", amount: "0.01" },
+    protocols: [{ x402: {} }],
+  });
+  assert.equal(paygo.responses[402].description, "Payment Required");
+  assert.equal(paygo.responses[200].content["application/json"].schema.$ref, "#/components/schemas/PaygoResponse");
+  assert.equal(openapi.paths["/v1/purchase/quote"].post.responses[200].content["application/json"].schema.$ref, "#/components/schemas/CommerceResponse");
+  assert.ok(openapi.components.schemas.CommerceResponse.required.includes("recommendation"));
+  assert.ok(openapi.components.schemas.CommerceResponse.required.includes("unsigned_transactions"));
+  assert.deepEqual(openapi.components.schemas.PaygoResponse.required, ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"]);
+  for (const ref of collectRefs(openapi)) {
+    assert.match(ref, /^#\//, `${ref} must be a local OpenAPI reference`);
+    assert.ok(resolveLocalRef(openapi, ref), `${ref} must resolve within the OpenAPI document`);
+  }
   assert.match(openapi.paths["/v1/purchase/quote"].post.description, /never signs or submits/);
   const demo = await body(await worker.fetch(new Request("https://edge.example/v1/demo"), env()));
   assert.equal(demo.free_fixed_examples, true);

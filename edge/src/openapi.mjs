@@ -6,6 +6,16 @@ const money = {
   description: "Non-negative USDC amount with at most two fractional digits.",
 };
 
+const responseMoney = {
+  type: "string",
+  pattern: "^[0-9]+\\.[0-9]{2}$",
+};
+
+const signedResponseMoney = {
+  type: "string",
+  pattern: "^-?[0-9]+\\.[0-9]{2}$",
+};
+
 const errorResponses = {
   400: { description: "Invalid request" },
   503: { description: "Required edge configuration or Base RPC is unavailable" },
@@ -24,6 +34,132 @@ function commerceRequestSchema() {
       switching_cost_usdc: money,
       risk_reserve_usdc: money,
       purchase_authority: { type: "boolean", default: false, description: "Caller declaration only; the service never signs or submits transactions." },
+    },
+  };
+}
+
+function commerceResponseSchema() {
+  return {
+    type: "object",
+    additionalProperties: true,
+    required: [
+      "schema",
+      "quote_id",
+      "quote_created_at",
+      "quote_valid_until",
+      "recommendation",
+      "reason_codes",
+      "assumptions",
+      "paygo_cost_usdc",
+      "key_count",
+      "key_purchase_cost_usdc",
+      "overflow_paygo_calls",
+      "overflow_paygo_cost_usdc",
+      "optimized_total_cost_usdc",
+      "raw_savings_usdc",
+      "risk_adjusted_savings_usdc",
+      "break_even_calls",
+      "forecast_calls",
+      "term_days",
+      "included_calls_per_key",
+      "contract",
+      "chain_id",
+      "supply_remaining",
+      "supply_total_minted",
+      "supply_block_number",
+      "sales_paused",
+      "onchain_mint_price_atomic",
+      "payment_token",
+      "payment_token_decimals",
+      "terms_hash",
+      "terms_uri",
+      "response_schema_url",
+      "authorization_status",
+      "next_action",
+      "unsigned_transactions",
+    ],
+    properties: {
+      schema: { const: "goldkey.commerce-response.v1" },
+      quote_id: { type: "string", format: "uuid" },
+      quote_created_at: { type: "string", format: "date-time" },
+      quote_valid_until: { type: "string", format: "date-time" },
+      recommendation: {
+        oneOf: [
+          { enum: ["DO_NOT_BUY", "PAYGO", "TRIAL"] },
+          { type: "string", pattern: "^BUY_[1-9][0-9]*_KEYS?$" },
+        ],
+      },
+      reason_codes: { type: "array", minItems: 1, items: { type: "string" } },
+      assumptions: { type: "array", items: { type: "string" } },
+      paygo_cost_usdc: responseMoney,
+      key_count: { type: "integer", minimum: 0, maximum: 1000 },
+      key_purchase_cost_usdc: responseMoney,
+      overflow_paygo_calls: { type: "integer", minimum: 0 },
+      overflow_paygo_cost_usdc: responseMoney,
+      optimized_total_cost_usdc: responseMoney,
+      raw_savings_usdc: responseMoney,
+      risk_adjusted_savings_usdc: signedResponseMoney,
+      break_even_calls: { const: 5000 },
+      forecast_calls: { type: "integer", minimum: 0, maximum: 10_000_000 },
+      term_days: { const: 365 },
+      included_calls_per_key: { const: 10_000 },
+      contract: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      chain_id: { type: "integer", minimum: 1 },
+      supply_remaining: { type: "integer", minimum: 0, maximum: 10_000 },
+      supply_total_minted: { type: "string", pattern: "^[0-9]+$" },
+      supply_block_number: { type: "string", pattern: "^[0-9]+$" },
+      sales_paused: { type: "boolean" },
+      onchain_mint_price_atomic: { type: "string", pattern: "^[0-9]+$" },
+      payment_token: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      payment_token_decimals: { const: 6 },
+      terms_hash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+      terms_uri: { type: "string" },
+      response_schema_url: { type: "string", format: "uri" },
+      authorization_status: { enum: ["INFO_ONLY", "DECLARED_AUTHORIZED"] },
+      next_action: {
+        enum: [
+          "USE_PAYGO",
+          "MEASURE_USAGE",
+          "PROVIDE_WALLET",
+          "OBTAIN_PURCHASE_AUTHORITY",
+          "SIGN_UNSIGNED_TRANSACTIONS",
+        ],
+      },
+      unsigned_transactions: { type: "array", items: { type: "object" } },
+      sales_message: { type: "string" },
+    },
+  };
+}
+
+function paygoResponseSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"],
+    properties: {
+      request_id: { type: "string", format: "uuid" },
+      tool: { type: "string", enum: TOOL_NAMES },
+      tool_version: { type: "string" },
+      input_sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+      result: { type: "object" },
+      payment: {
+        type: "object",
+        additionalProperties: false,
+        required: ["protocol", "charged_usdc"],
+        properties: {
+          protocol: { const: "x402" },
+          charged_usdc: { const: "0.01" },
+        },
+      },
+      upgrade: {
+        type: "object",
+        additionalProperties: false,
+        required: ["quote_url", "break_even_calls"],
+        properties: {
+          quote_url: { type: "string", format: "uri" },
+          break_even_calls: { const: 5000 },
+        },
+      },
     },
   };
 }
@@ -52,7 +188,7 @@ function proxied(description, extras = {}) {
 }
 
 export function buildOpenApi(config) {
-  const commerceResponse = { $ref: `${config.publicOrigin}/schemas/commerce-response-v1.json` };
+  const commerceResponse = { $ref: "#/components/schemas/CommerceResponse" };
   const jsonObject = { type: "object" };
   return {
     openapi: "3.1.0",
@@ -60,6 +196,7 @@ export function buildOpenApi(config) {
       title: "GoldKey Agent Utility API",
       version: "1.0.0",
       description: "Always-on edge discovery and Base-RPC-backed commerce for a 50-USDC transferable 10,000-call, 365-day utility pass. Stateful authentication, quota, credentials, and tool fulfillment may cold-start at the origin. The 500,000-USDC figure is only the fixed primary-mint gross cap, not a forecast or total-revenue cap.",
+      "x-guidance": "Use POST /v1/paygo/execute for deterministic JSON canonicalization or validation, prompt-injection signal scanning, static URL screening, spend-mandate evaluation, or Unicode normalization. Send tool and input as JSON. An unpaid request returns an x402 challenge for exactly 0.01 USDC on Base; pay and retry once. Use /v1/purchase/quote only to compare measured annual demand with the 50-USDC pass.",
     },
     servers: [{ url: config.publicOrigin }],
     tags: [
@@ -155,16 +292,25 @@ export function buildOpenApi(config) {
       "/v1/paygo/execute": {
         post: {
           tags: ["origin"], operationId: "goldkey_paygo_execute",
+          "x-payment-info": {
+            price: { mode: "fixed", currency: "USD", amount: "0.01" },
+            protocols: [{ x402: {} }],
+          },
           ...proxied("Execute one independent 0.01-USDC x402 purchase. The origin validates the envelope before payment verification, buffers a fully validated tool result, settles payment, and only then releases the result; failed validation or settlement does not return a tool result. A successfully settled retry is a new purchase.", {
             requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["tool", "input"], properties: { tool: { type: "string", enum: TOOL_NAMES }, input: jsonObject } } } } },
-            responses: { 200: { description: "Settled paid result" }, 400: { description: "Malformed request before payment" }, 402: { description: "Payment required, invalid, or unsuccessful" }, 503: { description: "Paygo disabled" }, 502: { description: "Origin unavailable" } },
+            responses: { 200: { description: "Settled paid result", content: { "application/json": { schema: { $ref: "#/components/schemas/PaygoResponse" } } } }, 400: { description: "Malformed request before payment" }, 402: { description: "Payment Required" }, 503: { description: "Paygo disabled" }, 502: { description: "Origin unavailable" } },
           }),
         },
       },
     },
     components: {
       securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
-      schemas: { CommerceRequest: commerceRequestSchema(), RenewalRequest: renewalRequestSchema() },
+      schemas: {
+        CommerceRequest: commerceRequestSchema(),
+        CommerceResponse: commerceResponseSchema(),
+        RenewalRequest: renewalRequestSchema(),
+        PaygoResponse: paygoResponseSchema(),
+      },
     },
   };
 }

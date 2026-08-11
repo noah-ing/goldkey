@@ -11,6 +11,10 @@ const VERSION = "1.0.0";
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_PROXY_BYTES = 1024 * 1024;
 const SUPPLY_CACHE_MS = 5_000;
+const DOMAIN_SKILL_ASSETS = new Map([
+  ["/.well-known/agent-skills/index.json", "application/json; charset=utf-8"],
+  ["/.well-known/agent-skills/goldkey-agent-utilities.tar.gz", "application/gzip"],
+]);
 
 function json(value, status = 200, headers = {}) {
   return new Response(JSON.stringify(value), {
@@ -166,6 +170,11 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
         commerce_configured: isCommerceConfigured(request, env),
         origin_checked: false,
       }, 200, { "cache-control": "no-store" });
+    }
+
+    const domainSkillContentType = DOMAIN_SKILL_ASSETS.get(pathname);
+    if (domainSkillContentType && method === "GET") {
+      return asset(env, request, pathname, domainSkillContentType);
     }
 
     if (pathname === "/terms" && method === "GET") return asset(env, request, "/TERMS.md", "text/markdown; charset=utf-8");
