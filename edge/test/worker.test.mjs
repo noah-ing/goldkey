@@ -247,17 +247,19 @@ test("domain skill discovery serves only the exact index and integrity-pinned ar
   ]);
 });
 
-test("Guard enforcer distribution serves one integrity-pinned installable package", async () => {
+test("Guard enforcer distribution serves the current package and retains the prior pinned release", async () => {
   const publicRoot = `${EDGE_ROOT}/public/.well-known/goldkey-guard`;
-  const artifactName = "goldkey-enforcer-0.1.0.tgz";
+  const artifactName = "goldkey-enforcer-0.2.0.tgz";
+  const previousName = "goldkey-enforcer-0.1.0.tgz";
   const artifactAsset = readFileSync(`${publicRoot}/${artifactName}`);
   const manifestAsset = readFileSync(`${publicRoot}/${artifactName}.integrity.json`);
+  const previousAsset = readFileSync(`${publicRoot}/${previousName}`);
   assert.deepEqual(artifactAsset, readFileSync(`${PACKAGE_ROOT}/enforcer/dist/${artifactName}`));
   assert.deepEqual(manifestAsset, readFileSync(`${PACKAGE_ROOT}/enforcer/dist/${artifactName}.integrity.json`));
   const manifest = JSON.parse(manifestAsset);
   assert.equal(manifest.schema, "goldkey-enforcer-package-integrity.v1");
   assert.equal(manifest.package, "@goldkey/enforcer");
-  assert.equal(manifest.version, "0.1.0");
+  assert.equal(manifest.version, "0.2.0");
   assert.equal(manifest.filename, artifactName);
   assert.equal(manifest.size, artifactAsset.byteLength);
   assert.equal(manifest.sha256, createHash("sha256").update(artifactAsset).digest("hex"));
@@ -271,6 +273,7 @@ test("Guard enforcer distribution serves one integrity-pinned installable packag
       requested.push(pathname);
       if (pathname === `/.well-known/goldkey-guard/${artifactName}`) return new Response(artifactAsset);
       if (pathname === `/.well-known/goldkey-guard/${artifactName}.integrity.json`) return new Response(manifestAsset);
+      if (pathname === `/.well-known/goldkey-guard/${previousName}`) return new Response(previousAsset);
       return new Response("not found", { status: 404 });
     },
   };
@@ -291,6 +294,13 @@ test("Guard enforcer distribution serves one integrity-pinned installable packag
   assert.match(manifestResponse.headers.get("content-type"), /^application\/json/);
   assert.deepEqual(Buffer.from(await manifestResponse.arrayBuffer()), manifestAsset);
 
+  const previousResponse = await worker.fetch(
+    new Request(`https://edge.example/.well-known/goldkey-guard/${previousName}`),
+    env({ ASSETS: distributionAssets }),
+  );
+  assert.equal(previousResponse.status, 200);
+  assert.deepEqual(Buffer.from(await previousResponse.arrayBuffer()), previousAsset);
+
   const nearMiss = await worker.fetch(
     new Request("https://edge.example/.well-known/goldkey-guard/latest.tgz"),
     env({ ASSETS: distributionAssets }),
@@ -299,6 +309,7 @@ test("Guard enforcer distribution serves one integrity-pinned installable packag
   assert.deepEqual(requested, [
     `/.well-known/goldkey-guard/${artifactName}`,
     `/.well-known/goldkey-guard/${artifactName}.integrity.json`,
+    `/.well-known/goldkey-guard/${previousName}`,
   ]);
 });
 
@@ -639,10 +650,11 @@ test("enabled Guard discovery is beta-only and proxies only the exact control-pl
   assert.equal(postedCatalog.guard.routes.terms, "https://edge.example/guard/terms");
   assert.equal(postedCatalog.guard.routes.revocation, "https://edge.example/v1/guard/revocations");
   assert.equal(postedCatalog.guard.routes.reconcile_commit_template, "https://edge.example/v1/guard/executions/{executionId}/reconcile-commit");
-  assert.equal(postedCatalog.guard.distribution.artifact, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz");
-  assert.equal(postedCatalog.guard.distribution.integrity_manifest, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json");
-  assert.equal(postedCatalog.guard.distribution.size_bytes, 44676);
-  assert.equal(postedCatalog.guard.distribution.sha256, "abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa");
+  assert.equal(postedCatalog.guard.distribution.artifact, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz");
+  assert.equal(postedCatalog.guard.distribution.integrity_manifest, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json");
+  assert.equal(postedCatalog.guard.distribution.size_bytes, 119159);
+  assert.equal(postedCatalog.guard.distribution.sha256, "aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36");
+  assert.deepEqual(postedCatalog.guard.distribution.adapters, ["mcp_stdio", "agentcash", "base_wallet"]);
   assert.match(postedCatalog.guard.topology.hosted_authorizer, /never receives upstream credentials/i);
   assert.match(postedCatalog.guard.topology.local_enforcer, /operator-controlled execution-path/i);
   assert.equal(agent.guard.status, "beta");

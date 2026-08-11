@@ -1,31 +1,53 @@
 {
   "name": "@goldkey/enforcer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Local fail-closed GoldKey authorization hook for MCP, HTTPS, and exact EVM transactions.",
+  "description": "Local fail-closed GoldKey enforcement runtime and config-driven adapters for MCP, AgentCash, HTTPS, and exact Base transactions.",
   "engines": {
     "node": ">=22"
   },
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./src/index.mjs",
+    "./adapters/runtime": "./src/adapters/runtime.mjs",
+    "./adapters/runtime-factory": "./src/adapters/runtime-factory.mjs",
+    "./adapters/mcp-stdio-config": "./src/adapters/mcp-stdio-config.mjs",
+    "./adapters/mcp-stdio-launcher": "./src/adapters/mcp-stdio-launcher.mjs",
+    "./adapters/agentcash": "./src/adapters/agentcash-mcp.mjs",
+    "./adapters/agentcash-server": "./src/adapters/agentcash-mcp-server.mjs",
+    "./adapters/base-wallet": "./src/adapters/base-wallet.mjs",
+    "./adapters/base-wallet-config": "./src/adapters/base-wallet-config.mjs",
+    "./adapters/base-wallet-request": "./src/adapters/base-wallet-request.mjs",
+    "./adapters/base-wallet-signer": "./src/adapters/base-wallet-signer.mjs",
+    "./adapters/base-wallet-mcp": "./src/adapters/base-wallet-mcp.mjs"
+  },
+  "bin": {
+    "goldkey-mcp-stdio": "./bin/goldkey-mcp-stdio.mjs",
+    "goldkey-agentcash": "./bin/goldkey-agentcash.mjs",
+    "goldkey-wallet": "./bin/goldkey-wallet.mjs",
+    "goldkey-wallet-mcp": "./bin/goldkey-wallet-mcp.mjs"
   },
   "files": [
     "src",
+    "bin",
+    "examples",
     "README.md",
     "npm-shrinkwrap.json"
   ],
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@x402/core": "2.21.0",
     "@x402/evm": "2.21.0",
     "@x402/fetch": "2.21.0",
-    "viem": "2.55.13"
+    "agentcash": "0.17.1",
+    "viem": "2.55.13",
+    "yaml": "2.9.0"
   },
   "scripts": {
     "pack:integrity": "node scripts/pack-integrity.mjs",
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
-  "main": "index.js",
+  "main": "./src/index.mjs",
   "directories": {
     "test": "test"
   },

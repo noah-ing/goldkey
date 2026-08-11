@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "goldkey-agentcash": {
+      "command": "/usr/bin/node",
+      "args": [
+        "/opt/goldkey/enforcer/bin/goldkey-agentcash.mjs",
+        "/etc/goldkey/goldkey.json"
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"company\":\"Example\"}"
+    },
+    {
+      "type": "text",
+      "text": "{\"protocol\":\"x402\",\"network\":\"base\",\"price\":\"$0.03\",\"payment\":{\"success\":true,\"transactionHash\":\"0xabc\"},\"headers\":{\"content-type\":\"application/json\",\"x-request-id\":\"req-1\"}}"
+    }
+  ]
+}

@@ -116,10 +116,64 @@ from `PAYMENT-RESPONSE`. The local outcome file is mode `0600`; it keeps this
 proof through commit so a payment can be reconciled without exposing the payer
 private key. The proof is cleared after a fully successful execution.
 
+## Config-driven launchers
+
+Version 0.2.0 includes four executable entry points. Each uses one
+operator-owned configuration document containing the shared `runtime` section
+plus the relevant adapter section:
+
+- `goldkey-mcp-stdio <config.yaml|config.json>` mirrors an explicitly selected
+  subset of one local stdio MCP server. Startup pins every exposed tool name and
+  canonical input-schema hash. Every forwarded call requires the caller's
+  durable GoldKey idempotency value and crosses hosted authorization before the
+  exact upstream call is committed and invoked once.
+- `goldkey-agentcash <config.json>` exposes only the operator-pinned AgentCash
+  x402 operations in the `agentcash` section. URL, method, headers, payment
+  network, and maximum upstream purchase amount are not agent-controlled. This
+  is an explicit local AgentCash facade, not transparent interception of other
+  AgentCash clients.
+- `goldkey-wallet execute --config <config.json> --request <request.json>` runs
+  one exact configured Base operation.
+- `goldkey-wallet-mcp --config <config.json>` exposes the configured native
+  transfer, ERC-20 transfer, and bounded-approval operations as local MCP tools.
+
+The packaged runtime loads or creates the private installation identity, pins a
+local public receipt keyset and exact registered policy hash, opens the durable
+outcome and payment-budget stores, and pays only an exact GoldKey Guard x402
+challenge from the named environment wallet. No customer-written bootstrap
+module is required. Complete the design-partner policy and installation
+registration before execute mode; the launchers do not bypass the hosted
+operator allowlist.
+
+Use the packaged examples as schemas, not production policy. They contain only
+placeholder policy hashes, destinations, and wallet addresses. Keep the config,
+state, budget database, installation key, receipt keyset, AgentCash wallet, and
+execution keystore under an operator-owned account. The Guard authorization
+payer and Base execution signer must be separate wallets.
+
+The discovery modes are deliberately narrower than execute mode:
+
+- `goldkey-mcp-stdio --inspect <config>` starts the pinned upstream MCP process
+  and sends only `initialize` and paginated `tools/list`; GoldKey does not load
+  its runtime, invoke a tool, authorize, sign, or pay. Because the upstream is
+  third-party code, inspect is not a claim that the upstream process itself is
+  side-effect-free.
+- `goldkey-agentcash --inspect <config> <request>` is offline: it does not start
+  AgentCash, resolve DNS, authorize, sign, or pay.
+- `goldkey-wallet probe --config <config> --request <request>` performs only
+  local syntax, allowlist, and cap validation. It does not load RPC, either
+  wallet, the runtime, or any payment path.
+
+Remove the agent's original MCP config, direct upstream credential, AgentCash
+wallet access, RPC signer access, and every alternate route to the protected
+capability. If the agent can invoke the original capability directly, the local
+enforcer cannot provide a security boundary. When the agent can execute shell
+commands, run the enforcer under a separate OS account or container.
+
 ## Integrity-pinned package artifact
 
 Run `npm run pack:integrity` in this directory to create
-`dist/goldkey-enforcer-0.1.0.tgz` and its adjacent
+`dist/goldkey-enforcer-0.2.0.tgz` and its adjacent
 `.tgz.integrity.json` manifest. The manifest records both a SHA-256 digest and
 an npm-compatible SHA-512 SRI value. Verify one of those values before
 installing the tarball; dependencies are exact-version pinned in
@@ -127,7 +181,7 @@ installing the tarball; dependencies are exact-version pinned in
 publish it to a registry.
 
 The permanent manifest is
-`https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json`.
+`https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json`.
 Download the tarball named by that manifest, verify its byte length and SHA-256
 or SHA-512 SRI locally, then install that exact local file. Never pipe the
 download into a shell and never install an unverified similarly named package
@@ -297,13 +351,14 @@ exactly match the signed outcome status and hash. Empty/204, replayed,
 malformed, mismatched, denied, or unbound generic success responses fail closed
 and prevent forwarding.
 
-## Non-goals and adoption gap
+## Non-goals
 
 This package does not sandbox arbitrary code, make agent-controlled policy
 authoritative, or make a non-idempotent third-party write safely retryable. It
-is an SDK hook, not yet a standalone MCP stdio launcher: operators must bind
-their real MCP transport, HTTPS credentials, and signer callbacks at process
-startup. Human review is intentionally not converted to `ALLOW` locally.
+ships config-driven stdio MCP, AgentCash, and Base-wallet launchers, while the
+lower-level SDK remains available for custom HTTPS connectors and other
+operator-owned transports. Human review is intentionally not converted to
+`ALLOW` locally.
 
 The operator—not the agent—must sign and register the immutable policy version,
 including optional bounded `arguments_schema`, `query_schema`, and

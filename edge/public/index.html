@@ -568,7 +568,7 @@
       <div class="hero-copy">
         <p class="eyebrow">Founding design-partner beta</p>
         <h1>No receipt.<br>No execution.</h1>
-        <p>GoldKey Guard puts operator-controlled policy in the real execution path of an AI agent. The exact proposed MCP, HTTPS, or supported EVM call runs only after your local enforcer verifies a signed, short-lived ALLOW receipt.</p>
+        <p>GoldKey Guard puts operator-controlled policy in the real execution path of an AI agent. Install a config-driven local MCP, AgentCash, or Base-wallet enforcer; the exact proposed call runs only after it verifies a signed, short-lived ALLOW receipt.</p>
         <div class="actions">
           <a class="button primary" href="https://github.com/noah-ing/goldkey/issues/new?template=guard-pilot.yml" target="_blank" rel="noreferrer">Start a $1,000 pilot&nbsp; →</a>
           <a class="button" href="/openapi.json">Inspect the live API</a>
@@ -595,7 +595,7 @@
     <div class="wrap facts" aria-label="Product facts">
       <div class="fact"><strong>Execution-path enforcement</strong><span>The local component controls forwarding.</span></div>
       <div class="fact"><strong>Operator-owned policy</strong><span>The guarded agent cannot rewrite authority.</span></div>
-      <div class="fact"><strong>Offline-verifiable receipts</strong><span>Decisions are exact-call bound and signed.</span></div>
+      <div class="fact"><strong>Config-driven launchers</strong><span>Guard MCP, AgentCash, or Base without customer code.</span></div>
       <div class="fact"><strong>Credentials stay local</strong><span>The hosted authorizer never receives them.</span></div>
     </div>
 
@@ -612,7 +612,7 @@
         <article class="feature">
           <span class="feature-num">01 / ENFORCE</span>
           <h3>Sit in the real execution path</h3>
-          <p>Route the connector or wallet signer through the customer-controlled enforcer. An unapproved call never reaches the upstream integration through that path.</p>
+          <p>Route the connector or wallet signer through the customer-controlled enforcer. Packaged launchers cover stdio MCP, operator-pinned AgentCash operations, and constrained Base-wallet actions.</p>
         </article>
         <article class="feature">
           <span class="feature-num">02 / AUTHORIZE</span>
@@ -724,7 +724,7 @@
           </div>
           <div class="limit-row">
             <div class="limit-label">Beta scope</div>
-            <p class="limit-copy">Onboarding is manual and connector-specific. EVM coverage is limited to supported transaction shapes and available Base RPC or simulation evidence.</p>
+            <p class="limit-copy">Policy registration remains a guided design-partner step. Packaged launchers cover generic stdio MCP, fixed AgentCash operations, and constrained Base-wallet actions; AgentCash requires a vetted endpoint plus OS egress controls, while custom HTTPS uses the lower-level SDK.</p>
           </div>
           <div class="limit-row">
             <div class="limit-label">No guarantee</div>
@@ -757,7 +757,7 @@
         <a href="/v1/catalog">Catalog</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/guard/terms">Guard terms</a>
-        <a href="/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json">Package integrity</a>
+        <a href="/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json">Package integrity</a>
         <a href="https://github.com/noah-ing/goldkey" target="_blank" rel="noreferrer">Source</a>
       </div>
     </div>

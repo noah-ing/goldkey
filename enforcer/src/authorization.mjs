@@ -86,7 +86,6 @@ function deadlineSignal(deadlineAt, clock, timeoutMs = MAX_AUTHORIZATION_TIMEOUT
     controller.abort(error);
     rejectExpired(error);
   }, remaining);
-  timeout.unref?.();
   return { signal: controller.signal, expired, clear: () => clearTimeout(timeout) };
 }
 

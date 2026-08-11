@@ -1,0 +1,59 @@
+{
+  "runtime": {
+    "schema": "goldkey.enforcer-runtime.v1",
+    "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "installation_key_file": "private/installation.json",
+    "receipt_keyset_file": "receipt-keys.json",
+    "state_directory": "private/outcomes",
+    "payment": {
+      "payer_private_key_env": "GOLDKEY_GUARD_PAYER_PRIVATE_KEY",
+      "budget_database_file": "private/guard-payment-budget.sqlite",
+      "period_seconds": 86400,
+      "max_period_atomic": "5000000",
+      "max_outstanding_atomic": "200000",
+      "max_outstanding_count": 2,
+      "timeout_ms": 15000
+    }
+  },
+  "base_wallet": {
+    "schema": "goldkey.base-wallet-config.v1",
+    "rpc_url_env": "GOLDKEY_BASE_RPC_URL",
+    "execution_signer": {
+      "type": "keystore",
+      "path": "./execution-keystore.json",
+      "password_env": "GOLDKEY_EXECUTION_KEYSTORE_PASSWORD",
+      "clear_env_after_load": true
+    },
+    "connectors": [
+      {
+        "id": "base-profit-wallet",
+        "chain_id": 8453,
+        "from": "0x1111111111111111111111111111111111111111",
+        "max_gas_limit": "100000",
+        "max_fee_per_gas_atomic": "1000000000",
+        "max_priority_fee_per_gas_atomic": "10000000",
+        "max_estimated_network_fee_atomic": "200000000000000",
+        "max_wallet_native_exposure_atomic": "1000000000000000",
+        "operations": [
+          {
+            "kind": "native_transfer",
+            "recipients": ["0x2222222222222222222222222222222222222222"],
+            "max_amount_atomic": "100000000000000"
+          },
+          {
+            "kind": "erc20_transfer",
+            "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "recipients": ["0x2222222222222222222222222222222222222222"],
+            "max_amount_atomic": "100000000"
+          },
+          {
+            "kind": "erc20_approve",
+            "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "spenders": ["0x3333333333333333333333333333333333333333"],
+            "max_amount_atomic": "100000000"
+          }
+        ]
+      }
+    ]
+  }
+}

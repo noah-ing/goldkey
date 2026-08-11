@@ -1,0 +1,9 @@
+{
+  "operation": "people_enrich",
+  "arguments": {
+    "body": {
+      "profile": "https://www.linkedin.com/in/example"
+    }
+  },
+  "idempotencyKey": "inspect-agentcash-0001"
+}

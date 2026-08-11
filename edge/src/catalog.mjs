@@ -188,11 +188,12 @@ export function guardCatalog(publicOrigin) {
     },
     distribution: {
       package: "@goldkey/enforcer",
-      version: "0.1.0",
-      artifact: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz`,
-      integrity_manifest: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json`,
-      size_bytes: 44676,
-      sha256: "abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa",
+      version: "0.2.0",
+      artifact: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz`,
+      integrity_manifest: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json`,
+      size_bytes: 119159,
+      sha256: "aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36",
+      adapters: ["mcp_stdio", "agentcash", "base_wallet"],
       install_policy: "Download, verify bytes against the pinned digest, then install the local tarball with lifecycle scripts disabled. Do not install a similarly named registry package.",
     },
     routes: {

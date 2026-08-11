@@ -53,18 +53,20 @@ For a paid authorization, the SDK retains only the exact public x402 `PaymentPay
 
 ### Install the integrity-pinned local enforcer
 
-Obtain authorization before downloading or installing a package. Do not install a similarly named registry package. The audited beta artifact is exactly 44,676 bytes with SHA-256 `abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa`:
+Obtain authorization before downloading or installing a package. Do not install a similarly named registry package. The audited beta artifact is exactly 119,159 bytes with SHA-256 `aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36`:
 
-- Manifest: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json`
-- Artifact: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz`
+- Manifest: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json`
+- Artifact: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz`
 
-Fetch both files without executing either. Require the live manifest to report package `@goldkey/enforcer`, version `0.1.0`, size `44676`, the exact SHA-256 above, and SHA-512 SRI `sha512-TrmQZGPtuSJNP+mwnC3l672QcwJmyR8L6XbRPt3ncg509vvNkQTlWfuqkKSlinl1fVIZqUOodjQvhgiQ5tsyrA==`. Compute SHA-256 over the downloaded tarball bytes and compare before installing the local file with lifecycle scripts disabled. Read its bundled README and bind operator-controlled connectors before use:
+Fetch both files without executing either. Require the live manifest to report package `@goldkey/enforcer`, version `0.2.0`, size `119159`, the exact SHA-256 above, and SHA-512 SRI `sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==`. Compute SHA-256 over the downloaded tarball bytes and compare before installing the local file with lifecycle scripts disabled. Read its bundled README and bind operator-controlled connectors before use:
 
 ```sh
-npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.1.0.tgz
+npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.2.0.tgz
 ```
 
-The artifact is an SDK hook, not a transparent standalone MCP launcher. The operator must wire its actual MCP callback, HTTPS trusted headers, or EVM signer into a separate local process and remove the guarded agent's direct route to those capabilities. The package's `RemoteAuthorizer` validates the exact 0.05- or 0.10-USDC x402 challenge before its local payer signs, retries the identical authorization request at most once, and never passes that payer signer to an agent connector.
+The artifact includes config-driven `goldkey-mcp-stdio`, `goldkey-agentcash`, `goldkey-wallet`, and `goldkey-wallet-mcp` launchers plus the lower-level SDK. Use the packaged examples to combine the shared runtime with one operator-owned adapter config; no customer authorization client is required. Remove the guarded agent's original MCP server, AgentCash wallet route, upstream credential, or execution signer so the local enforcer is exclusive. Generic MCP and AgentCash purchases require a durable caller-supplied `_meta["com.goldkey/idempotency-key"]`; missing keys fail before authorization or forwarding. The package validates the exact 0.05- or 0.10-USDC Guard challenge before its separate local payer signs, enforces a durable cumulative payment budget, retries the identical authorization request at most once, and never passes that payer signer to an agent connector.
+
+Use `goldkey-mcp-stdio --inspect CONFIG` only to start the pinned upstream and collect tool names/schema hashes through `initialize` and `tools/list`; GoldKey does not authorize, sign, pay, or invoke tools during that flow, but the upstream process itself is not guaranteed side-effect-free. `goldkey-agentcash --inspect CONFIG REQUEST` is offline. `goldkey-wallet probe --config CONFIG --request REQUEST` does not load RPC, either wallet, the runtime, or any payment path. AgentCash 0.17.1 does not expose socket pinning or redirect control, so its adapter is limited to fixed query-free vetted endpoints behind separate OS/container egress controls and a segregated, deliberately funded AgentCash wallet. Base execution requires a separate low-balance signer wallet, a different Guard payer wallet, and no concurrent funding or signer reuse.
 
 The bundled client has discovery and zero-spend inspection commands only:
 

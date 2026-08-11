@@ -146,10 +146,14 @@ test("distribution skill describes Guard as feature-gated hosted authorization p
   assert.match(source, /`outcome_unknown` and never retry them automatically/);
   assert.match(source, /Only `guard_payment_not_settled` triggers the recovery wrapper/);
   assert.match(source, /hard process death after transmitting payment but before receiving the transaction hash remains fail-closed/);
-  assert.match(source, /abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa/);
-  assert.match(source, /sha512-TrmQZGPtuSJNP\+mwnC3l672QcwJmyR8L6XbRPt3ncg509vvNkQTlWfuqkKSlinl1fVIZqUOodjQvhgiQ5tsyrA==/);
-  assert.match(source, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.1\.0\.tgz/);
-  assert.match(source, /SDK hook, not a transparent standalone MCP launcher/);
+  assert.match(source, /aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36/);
+  assert.match(source, /sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg\+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==/);
+  assert.match(source, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.2\.0\.tgz/);
+  assert.match(source, /config-driven `goldkey-mcp-stdio`, `goldkey-agentcash`, `goldkey-wallet`, and `goldkey-wallet-mcp` launchers/);
+  assert.match(source, /no customer authorization client is required/);
+  assert.match(source, /durable caller-supplied `_meta\["com\.goldkey\/idempotency-key"\]`/);
+  assert.match(source, /AgentCash 0\.17\.1 does not expose socket pinning or redirect control/);
+  assert.match(source, /different Guard payer wallet/);
   assert.match(source, /guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON/);
   assert.match(source, /Use the probe commands only with a non-secret synthetic request because command arguments may enter shell history/);
   assert.match(source, /probe deliberately does not return or verify its authorization/);

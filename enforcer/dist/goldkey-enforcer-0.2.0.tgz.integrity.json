@@ -1,0 +1,11 @@
+{
+  "schema": "goldkey-enforcer-package-integrity.v1",
+  "package": "@goldkey/enforcer",
+  "version": "0.2.0",
+  "filename": "goldkey-enforcer-0.2.0.tgz",
+  "download_url": "https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz",
+  "node_engine": ">=22",
+  "size": 119159,
+  "sha256": "aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36",
+  "integrity": "sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg=="
+}

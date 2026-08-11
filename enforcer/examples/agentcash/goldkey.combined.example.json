@@ -1,0 +1,43 @@
+{
+  "runtime": {
+    "schema": "goldkey.enforcer-runtime.v1",
+    "policy_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "installation_key_file": "private/installation.json",
+    "receipt_keyset_file": "receipt-keys.json",
+    "state_directory": "private/outcomes",
+    "payment": {
+      "payer_private_key_env": "GOLDKEY_GUARD_PAYER_PRIVATE_KEY",
+      "budget_database_file": "private/guard-payment-budget.sqlite",
+      "period_seconds": 86400,
+      "max_period_atomic": "5000000",
+      "max_outstanding_atomic": "200000",
+      "max_outstanding_count": 2,
+      "timeout_ms": 15000
+    }
+  },
+  "agentcash": {
+    "schema": "goldkey.agentcash-mcp-adapter.v1",
+    "connector_id": "agentcash-x402",
+    "server_id": "agentcash-local",
+    "guard_origin": "https://goldkey-edge-storefront.noah-ing.workers.dev",
+    "node_command": "/opt/goldkey/node/bin/node",
+    "agentcash_command": "/opt/goldkey/node_modules/agentcash/dist/esm/index.js",
+    "agentcash_version": "0.17.1",
+    "credential_mode": "wallet_files",
+    "working_directory": "/var/lib/goldkey/agentcash",
+    "request_timeout_ms": 8000,
+    "max_response_bytes": 262144,
+    "operations": [
+      {
+        "name": "people_enrich",
+        "url": "https://stableenrich.dev/api/pdl/people-enrich",
+        "method": "POST",
+        "payment_network": "base",
+        "max_amount_usd": "0.25",
+        "headers": {
+          "accept": "application/json"
+        }
+      }
+    ]
+  }
+}

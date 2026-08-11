@@ -1,0 +1,45 @@
+# One operator-owned document configures both the shared GoldKey runtime and
+# this exclusive MCP path. Inspection reads only mcp_stdio and never loads the
+# runtime, payer, signer, or lifecycle clients.
+runtime:
+  schema: goldkey.enforcer-runtime.v1
+  policy_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  installation_key_file: ./private/installation-key.json
+  receipt_keyset_file: ./receipt-keyset.json
+  state_directory: ./private/outcomes
+  payment:
+    payer_private_key_env: GOLDKEY_PAYER_PRIVATE_KEY
+    budget_database_file: ./private/payment-budget.sqlite
+    period_seconds: 86400
+    max_period_atomic: "5000000"
+    max_outstanding_atomic: "500000"
+    max_outstanding_count: 10
+    timeout_ms: 15000
+
+mcp_stdio:
+  schema: goldkey.mcp-stdio-launcher.v1
+  connector:
+    id: operator-calendar
+    server_id: calendar-production
+    tools:
+      - name: list_events
+        effect: read
+        input_schema_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+      - name: create_event
+        effect: write
+        input_schema_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+  upstream:
+    # Resolve these placeholders to real, normalized absolute paths. The
+    # command must be a regular executable and not a symlink.
+    command: /absolute/path/to/node
+    args:
+      - /absolute/path/to/operator-owned-calendar-server.mjs
+    cwd: /absolute/path/to/operator-owned-calendar-server
+    # This is the complete upstream environment. Nothing else is inherited.
+    env:
+      CALENDAR_API_TOKEN:
+        from_env: GOLDKEY_UPSTREAM_CALENDAR_API_TOKEN
+      NODE_ENV:
+        value: production
+    startup_timeout_ms: 15000
+    max_message_bytes: 1048576

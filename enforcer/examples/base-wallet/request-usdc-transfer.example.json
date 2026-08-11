@@ -1,0 +1,15 @@
+{
+  "schema": "goldkey.base-wallet-request.v1",
+  "connector_id": "base-profit-wallet",
+  "idempotency_key": "operator-job-0002",
+  "nonce": "0",
+  "gas_limit": "80000",
+  "max_fee_per_gas_atomic": "100000000",
+  "max_priority_fee_per_gas_atomic": "1000000",
+  "operation": {
+    "kind": "erc20_transfer",
+    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "to": "0x2222222222222222222222222222222222222222",
+    "amount_atomic": "1000000"
+  }
+}

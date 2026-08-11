@@ -1,0 +1,20 @@
+{
+  "tools": [
+    {
+      "name": "fetch",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {},
+          "method": {},
+          "body": {},
+          "headers": {},
+          "timeout": {},
+          "paymentProtocol": {},
+          "paymentNetwork": {},
+          "maxAmount": {}
+        }
+      }
+    }
+  ]
+}

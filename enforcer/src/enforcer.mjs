@@ -388,7 +388,6 @@ export class GoldKeyEnforcer {
         controller.abort(error);
         reject(error);
       }, remaining);
-      timeout.unref?.();
     });
     try {
       return await Promise.race([

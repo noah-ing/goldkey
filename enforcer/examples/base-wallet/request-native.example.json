@@ -1,0 +1,14 @@
+{
+  "schema": "goldkey.base-wallet-request.v1",
+  "connector_id": "base-profit-wallet",
+  "idempotency_key": "operator-job-0001",
+  "nonce": "0",
+  "gas_limit": "30000",
+  "max_fee_per_gas_atomic": "100000000",
+  "max_priority_fee_per_gas_atomic": "1000000",
+  "operation": {
+    "kind": "native_transfer",
+    "to": "0x2222222222222222222222222222222222222222",
+    "amount_atomic": "10000000000000"
+  }
+}
