@@ -323,7 +323,7 @@ test("Action Gate is first-class in OpenAPI and the fixed demo", async (t) => {
   const openapi = await json(await fetch(`${base}/openapi.json`));
   assert.equal(openapi.response.status, 200);
   const actionOperation = openapi.body.paths["/v1/action-gate"].post;
-  assert.equal(actionOperation.operationId, "goldkey_action_gate");
+  assert.equal(actionOperation.operationId, "goldkey_action_gate_ai_agent_tool_call_preflight");
   assert.match(actionOperation.summary, /\$0\.01 AI-agent tool-call preflight/);
   assert.match(actionOperation.description, /not a cryptographic signature/);
   assert.deepEqual(actionOperation["x-payment-info"], {

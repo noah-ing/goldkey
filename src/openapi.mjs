@@ -489,7 +489,7 @@ export function buildOpenApi(config) {
       },
       "/v1/action-gate": {
         post: {
-          operationId: "goldkey_action_gate",
+          operationId: "goldkey_action_gate_ai_agent_tool_call_preflight",
           summary: "$0.01 AI-agent tool-call preflight: return ALLOW, REVIEW, or BLOCK before an MCP/tool call, payment, fetch, message, write, or execution.",
           "x-payment-info": {
             price: { mode: "fixed", currency: "USD", amount: "0.01" },

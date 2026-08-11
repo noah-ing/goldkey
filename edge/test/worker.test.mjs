@@ -219,7 +219,7 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   const actionGate = openapi.paths["/v1/action-gate"].post;
   assert.equal(paygo.tags[0], "origin");
   assert.equal(actionGate.tags[0], "origin");
-  assert.equal(actionGate.operationId, "goldkey_action_gate");
+  assert.equal(actionGate.operationId, "goldkey_action_gate_ai_agent_tool_call_preflight");
   assert.match(openapi.info["x-guidance"], /POST \/v1\/action-gate/);
   assert.match(openapi.info["x-guidance"], /POST \/v1\/paygo\/execute/);
   assert.match(openapi.info["x-guidance"], /0\.01 USDC/);
