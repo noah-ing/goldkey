@@ -32,6 +32,29 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+function paymentRequiredResponse(overrides = {}) {
+  const challenge = {
+    x402Version: 2,
+    resource: { url: "https://goldkey.example/v1/paygo/execute" },
+    accepts: [{
+      scheme: "exact",
+      network: "eip155:8453",
+      amount: "10000",
+      asset: USDC,
+      payTo: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b",
+      maxTimeoutSeconds: 300,
+      ...overrides,
+    }],
+  };
+  return new Response("{}", {
+    status: 402,
+    headers: {
+      "content-type": "application/json",
+      "payment-required": Buffer.from(JSON.stringify(challenge)).toString("base64"),
+    },
+  });
+}
+
 function offer(overrides = {}) {
   return {
     schema: "goldkey.offer.v1",
@@ -72,6 +95,80 @@ test("distribution skill uses portable paths and documented single-line metadata
   const metadata = JSON.parse(metadataLines[0].slice("metadata: ".length));
   assert.deepEqual(metadata.openclaw.requires.bins, ["node"]);
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
+});
+
+test("distribution skill exposes a bounded opt-in AgentCash settlement path", async () => {
+  const source = await readFile(skillPath, "utf8");
+  const endpoint = "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/paygo/execute";
+
+  assert.match(source, /https:\/\/www\.x402scan\.com\/server\/8447beac-d24b-434a-bd01-5abfdab53f84/);
+  assert.match(source, /https:\/\/tryponcho\.com\/tool\/url_aHR0cHM6Ly9nb2xka2V5LWVkZ2Utc3RvcmVmcm9udC5ub2FoLWluZy53b3JrZXJzLmRldi92MS9wYXlnby9leGVjdXRl/);
+  assert.match(source, /goldkey-client\.mjs" paygo-probe --name security\.prompt_scan --input/);
+  assert.match(source, new RegExp(`agentcash@0\\.17\\.1 check[\\s\\S]*"${endpoint}"[\\s\\S]*-m POST[\\s\\S]*-H 'Content-Type: application/json'[\\s\\S]*-b`));
+  assert.match(source, /agentcash@0\.17\.1 accounts --format json/);
+  assert.match(source, /agentcash@0\.17\.1 fetch[\s\S]*--payment-protocol x402[\s\S]*--payment-network base[\s\S]*--max-amount 0\.01/);
+  assert.match(source, /scheme `exact` on `eip155:8453`/);
+  assert.match(source, /asset `0x833589fcd6edb6e08f4c7c32d4f71b54bda02913`/);
+  assert.match(source, /amount `"10000"` atomic USDC/);
+  assert.match(source, /payee `0xd6b7e00fcd46966676f554fe0455bff739e85b1b`/);
+  assert.match(source, /`max_timeout_seconds` no greater than 300/);
+  assert.match(source, /explicit current mandate for one 0\.01-USDC Base mainnet payment/);
+  assert.match(source, /`check` and `accounts` may create local wallet files on first use/);
+  assert.match(source, /prohibits network contact, stop/);
+  assert.match(source, /permission for package download\/cache changes and local AgentCash wallet access or creation/);
+  assert.match(source, /real, nonrefundable mainnet settlement, not a demo or dry run/);
+  assert.match(source, /Bind the mandate to the exact serialized request body and a short expiry/);
+  assert.match(source, /Do not interpolate arbitrary untrusted text into the shell literal/);
+  assert.match(source, /deterministic evidence, not a safety guarantee/);
+  assert.match(source, /reconcile the payment receipt and wallet activity before any retry/);
+  assert.match(source, /do not pass AgentCash's `--yes` flag/);
+  assert.ok(source.indexOf("agentcash@0.17.1 check") < source.indexOf("agentcash@0.17.1 fetch"));
+});
+
+test("paygo probe validates the complete canonical challenge without a wallet or payment", async () => {
+  let request;
+  const result = await run(["paygo-probe", "--name", "security.prompt_scan", "--input", '{"text":"untrusted"}'], {
+    env: {},
+    releaseIdentitySource: RELEASE,
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return paymentRequiredResponse();
+    },
+  });
+  assert.equal(request.url, "https://goldkey.example/v1/paygo/execute");
+  assert.equal(request.init.method, "POST");
+  assert.equal(request.init.headers["payment-signature"], undefined);
+  assert.deepEqual(JSON.parse(request.init.body), { tool: "security.prompt_scan", input: { text: "untrusted" } });
+  assert.deepEqual(result.payment, {
+    x402_version: 2,
+    scheme: "exact",
+    network: "eip155:8453",
+    amount_atomic: "10000",
+    asset: USDC.toLowerCase(),
+    pay_to: "0xd6b7e00fcd46966676f554fe0455bff739e85b1b",
+    resource: "https://goldkey.example/v1/paygo/execute",
+    max_timeout_seconds: 300,
+  });
+  assert.equal(typeof result.payment_required, "string");
+});
+
+test("paygo probe rejects payment substitution before returning a challenge", async () => {
+  for (const [overrides, pattern] of [
+    [{ amount: "10001" }, /amount must be 10000/],
+    [{ asset: CONTRACT }, /canonical Base USDC/],
+    [{ payTo: CONTRACT }, /GoldKey treasury/],
+    [{ network: "eip155:84532" }, /network must be eip155:8453/],
+    [{ maxTimeoutSeconds: 301 }, /maxTimeoutSeconds must be 1-300/],
+  ]) {
+    await assert.rejects(
+      run(["paygo-probe", "--name", "security.prompt_scan", "--input", '{"text":"untrusted"}'], {
+        env: {},
+        releaseIdentitySource: RELEASE,
+        fetchImpl: async () => paymentRequiredResponse(overrides),
+      }),
+      pattern,
+    );
+  }
 });
 
 test("client recognizes direct execution through a symlinked install path", async () => {

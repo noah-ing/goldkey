@@ -207,6 +207,18 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(paygo.tags[0], "origin");
   assert.match(openapi.info["x-guidance"], /POST \/v1\/paygo\/execute/);
   assert.match(openapi.info["x-guidance"], /0\.01 USDC/);
+  assert.match(paygo.summary, /^\$0\.01-USDC Base x402 access to six deterministic tools:/);
+  assert.match(paygo.description, /^For \$0\.01 USDC per x402 call on Base, execute one of six deterministic utilities:/);
+  const deterministicTools = ["json.canonicalize", "json.validate", "security.prompt_scan", "security.url_check", "policy.spend_check", "text.normalize"];
+  assert.deepEqual(paygo.requestBody.content["application/json"].schema.properties.tool.enum, deterministicTools);
+  for (const tool of deterministicTools) {
+    assert.match(paygo.summary, new RegExp(tool.replace(".", "\\.")));
+    assert.match(paygo.description, new RegExp(tool.replace(".", "\\.")));
+  }
+  assert.match(paygo.description, /validates the envelope before payment verification/);
+  assert.match(paygo.description, /settles payment, and only then releases the result/);
+  assert.match(paygo.description, /failed validation or settlement does not return a tool result/);
+  assert.match(paygo.description, /successfully settled retry is a new purchase/);
   assert.deepEqual(paygo["x-payment-info"], {
     price: { mode: "fixed", currency: "USD", amount: "0.01" },
     protocols: [{ x402: {} }],

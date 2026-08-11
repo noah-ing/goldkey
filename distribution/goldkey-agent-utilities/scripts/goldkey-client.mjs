@@ -6,6 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const MAINNET_CHAIN_ID = 8453;
 const BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const PAYGO_TREASURY = "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b";
+const PAYGO_NETWORK = "eip155:8453";
+const PAYGO_AMOUNT_ATOMIC = "10000";
+const PAYGO_MAX_TIMEOUT_SECONDS = 300;
 const MAX_SIGNATURE_CHARS = 32 * 1024;
 
 // Frozen, source-verified Base mainnet release identity.
@@ -260,6 +264,7 @@ async function request(path, { method = "GET", body, token, headers = {}, valida
 }
 
 async function paymentProbe(tool, input, context) {
+  if (!context.runtime.canonical) fail("Refusing to probe x402 payment against a noncanonical development origin");
   const response = await context.fetchImpl(`${context.runtime.origin}/v1/paygo/execute`, {
     method: "POST",
     redirect: "error",
@@ -281,7 +286,43 @@ async function paymentProbe(tool, input, context) {
   }
   const paymentRequired = response.headers.get("payment-required");
   if (!paymentRequired) fail("HTTP 402 response omitted the PAYMENT-REQUIRED header");
-  return { http_status: 402, payment_required: paymentRequired, body };
+  if (paymentRequired.length > 128 * 1024) fail("PAYMENT-REQUIRED header is too large");
+  let challenge;
+  try {
+    challenge = JSON.parse(Buffer.from(paymentRequired, "base64").toString("utf8"));
+  } catch {
+    fail("PAYMENT-REQUIRED header is not valid base64-encoded JSON");
+  }
+  if (!challenge || typeof challenge !== "object" || Array.isArray(challenge)) fail("PAYMENT-REQUIRED challenge must be an object");
+  if (challenge.x402Version !== 2) fail("PAYMENT-REQUIRED challenge must use x402 v2");
+  const resource = `${context.runtime.origin}/v1/paygo/execute`;
+  if (challenge.resource?.url !== resource) fail("PAYMENT-REQUIRED resource URL does not match the canonical endpoint");
+  if (!Array.isArray(challenge.accepts) || challenge.accepts.length !== 1) fail("PAYMENT-REQUIRED challenge must contain exactly one payment option");
+  const option = challenge.accepts[0];
+  if (!option || typeof option !== "object" || Array.isArray(option)) fail("PAYMENT-REQUIRED payment option must be an object");
+  if (option.scheme !== "exact") fail("PAYMENT-REQUIRED payment scheme must be exact");
+  if (option.network !== PAYGO_NETWORK) fail(`PAYMENT-REQUIRED network must be ${PAYGO_NETWORK}`);
+  if (option.amount !== PAYGO_AMOUNT_ATOMIC) fail(`PAYMENT-REQUIRED amount must be ${PAYGO_AMOUNT_ATOMIC} atomic USDC`);
+  if (normalizeAddress(option.asset, "PAYMENT-REQUIRED asset") !== context.runtime.identity.usdc) fail("PAYMENT-REQUIRED asset must be canonical Base USDC");
+  if (normalizeAddress(option.payTo, "PAYMENT-REQUIRED payee") !== PAYGO_TREASURY.toLowerCase()) fail("PAYMENT-REQUIRED payee does not match the GoldKey treasury");
+  if (!Number.isInteger(option.maxTimeoutSeconds) || option.maxTimeoutSeconds < 1 || option.maxTimeoutSeconds > PAYGO_MAX_TIMEOUT_SECONDS) {
+    fail(`PAYMENT-REQUIRED maxTimeoutSeconds must be 1-${PAYGO_MAX_TIMEOUT_SECONDS}`);
+  }
+  return {
+    http_status: 402,
+    payment_required: paymentRequired,
+    payment: {
+      x402_version: 2,
+      scheme: option.scheme,
+      network: option.network,
+      amount_atomic: option.amount,
+      asset: normalizeAddress(option.asset, "PAYMENT-REQUIRED asset"),
+      pay_to: normalizeAddress(option.payTo, "PAYMENT-REQUIRED payee"),
+      resource,
+      max_timeout_seconds: option.maxTimeoutSeconds,
+    },
+    body,
+  };
 }
 
 function accessToken(env) {
