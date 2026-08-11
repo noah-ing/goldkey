@@ -9,7 +9,7 @@ import { GoldKeyDatabase } from "../src/database.mjs";
 
 const OWNER = getAddress("0x000000000000000000000000000000000000dEaD");
 
-async function fixture(t) {
+async function fixture(t, overrides = {}) {
   const config = loadConfig({
     nodeEnv: "test",
     port: 8402,
@@ -20,7 +20,7 @@ async function fixture(t) {
     contractAddress: "0x0000000000000000000000000000000000000001",
     usdcAddress: "0x0000000000000000000000000000000000000002",
     treasuryAddress: "0x0000000000000000000000000000000000000003",
-    x402Enabled: false,
+    x402Enabled: overrides.x402Enabled ?? false,
     devAuthBypass: true,
     devAuthToken: "test-owner-token-that-is-long",
   });
@@ -36,7 +36,7 @@ async function fixture(t) {
   };
   const db = new GoldKeyDatabase();
   const auth = createAuthService({ config, db, chain });
-  const app = createApp({ config, db, chain, auth });
+  const app = createApp({ config, db, chain, auth, x402Middleware: overrides.x402Middleware });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -123,6 +123,57 @@ test("commerce endpoint sells only above break-even and disabled paygo never lea
   const paygo = await json(await fetch(`${base}/v1/paygo/execute`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool: "json.canonicalize", input: { value: 1 } }) }));
   assert.equal(paygo.response.status, 503);
   assert.equal(paygo.body.error.code, "paygo_disabled");
+});
+
+test("x402 discovery probes reach the challenge while malformed paid requests fail first", async (t) => {
+  let challenges = 0;
+  const x402Middleware = (req, res, next) => {
+    if (req.method !== "POST" || req.path !== "/v1/paygo/execute") return next();
+    challenges += 1;
+    res
+      .status(402)
+      .set("payment-required", Buffer.from(JSON.stringify({ x402Version: 2, extensions: { bazaar: {} } })).toString("base64"))
+      .json({});
+  };
+  const { base } = await fixture(t, { x402Enabled: true, x402Middleware });
+
+  const probe = await fetch(`${base}/v1/paygo/execute`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(probe.status, 402);
+  assert.ok(probe.headers.get("payment-required"));
+  assert.equal(challenges, 1);
+
+  for (const paymentHeader of ["payment-signature", "x-payment"]) {
+    const malformedPaid = await json(await fetch(`${base}/v1/paygo/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json", [paymentHeader]: "invalid-payment" },
+      body: "{}",
+    }));
+    assert.equal(malformedPaid.response.status, 404);
+    assert.equal(malformedPaid.body.error.code, "unknown_tool");
+    assert.equal(malformedPaid.response.headers.get("payment-required"), null);
+  }
+  assert.equal(challenges, 1);
+
+  const unknown = await json(await fetch(`${base}/v1/paygo/execute`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tool: "unknown.tool", input: {} }),
+  }));
+  assert.equal(unknown.response.status, 404);
+  assert.equal(unknown.body.error.code, "unknown_tool");
+  assert.equal(challenges, 1);
+
+  const validUnpaid = await fetch(`${base}/v1/paygo/execute`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tool: "json.canonicalize", input: { value: 1 } }),
+  });
+  assert.equal(validUnpaid.status, 402);
+  assert.equal(challenges, 2);
 });
 
 test("terms, schema, and renewal quotes are machine-readable", async (t) => {

@@ -38,7 +38,17 @@ function tokenImage(tokenId) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
-export function createApp({ config, db, chain, auth }) {
+export function isUnpaidX402DiscoveryProbe(req) {
+  return req.method === "POST"
+    && req.body !== null
+    && typeof req.body === "object"
+    && !Array.isArray(req.body)
+    && Object.keys(req.body).length === 0
+    && req.get("payment-signature") === undefined
+    && req.get("x-payment") === undefined;
+}
+
+export function createApp({ config, db, chain, auth, x402Middleware }) {
   const app = express();
   const termsDocument = readFileSync(new URL("../TERMS.md", import.meta.url), "utf8");
   const commerceResponseSchema = JSON.parse(readFileSync(new URL("../agent/goldkey-commerce-response.schema.json", import.meta.url), "utf8"));
@@ -75,6 +85,10 @@ export function createApp({ config, db, chain, auth }) {
   if (config.x402Enabled) {
     app.use("/v1/paygo/execute", (req, _res, next) => {
       try {
+        // CDP Bazaar validates POST resources with an empty, unpaid discovery
+        // probe. Let only that probe reach x402 so it receives the canonical
+        // 402 challenge; malformed paid requests still fail before verification.
+        if (isUnpaidX402DiscoveryProbe(req)) return next();
         assert(req.method === "POST" && req.body && typeof req.body === "object", 400, "invalid_input", "request must be an object");
         assert(typeof req.body.tool === "string" && Object.hasOwn(TOOL_REGISTRY, req.body.tool), 404, "unknown_tool", "Unknown GoldKey tool");
         assert(req.body.input && typeof req.body.input === "object" && !Array.isArray(req.body.input), 400, "invalid_input", "input must be an object");
@@ -83,7 +97,7 @@ export function createApp({ config, db, chain, auth }) {
         next(error);
       }
     });
-    app.use(createX402Middleware(config));
+    app.use(x402Middleware ?? createX402Middleware(config));
   }
 
   app.get("/healthz", (_req, res) => res.json({ ok: true, service: "goldkey", version: "1.0.0" }));
