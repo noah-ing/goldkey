@@ -28,7 +28,7 @@ export function createAuthService({ config, db, chain }) {
     }
   }
 
-  async function challenge({ wallet, token_id: tokenIdInput }) {
+  async function challenge({ wallet, token_id: tokenIdInput } = {}) {
     assert(isAddress(wallet), 400, "invalid_wallet", "wallet must be an EVM address");
     let tokenId;
     try {
@@ -48,7 +48,7 @@ export function createAuthService({ config, db, chain }) {
     return { challenge_id: id, message, expires_at: new Date(expiresAt).toISOString() };
   }
 
-  async function verify({ challenge_id: challengeId, signature }) {
+  async function verify({ challenge_id: challengeId, signature } = {}) {
     assert(typeof challengeId === "string", 400, "invalid_challenge", "challenge_id is required");
     assert(typeof signature === "string" && signature.length <= 8194 && /^0x[0-9a-fA-F]+$/.test(signature), 400, "invalid_signature", "signature must be a hex string of at most 4096 bytes");
     const record = await db.getChallenge(challengeId);

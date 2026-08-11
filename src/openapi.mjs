@@ -185,6 +185,30 @@ function renewalRequestSchema() {
   };
 }
 
+function authChallengeRequestSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["wallet", "token_id"],
+    properties: {
+      wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      token_id: { type: "string", pattern: "^[1-9][0-9]*$" },
+    },
+  };
+}
+
+function authVerifyRequestSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["challenge_id", "signature"],
+    properties: {
+      challenge_id: { type: "string", format: "uuid" },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+    },
+  };
+}
+
 function renewalResponseSchema() {
   return {
     type: "object",
@@ -335,13 +359,27 @@ export function buildOpenApi(config) {
       "/v1/auth/challenge": {
         post: {
           operationId: "goldkey_auth_challenge",
-          responses: { 200: { description: "Exact wallet-signature challenge for a token owner" } },
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthChallengeRequest" } } },
+          },
+          responses: {
+            200: { description: "Exact wallet-signature challenge for a token owner" },
+            400: { description: "Missing or invalid wallet or token ID" },
+          },
         },
       },
       "/v1/auth/verify": {
         post: {
           operationId: "goldkey_auth_verify",
-          responses: { 200: { description: "Short-lived current-owner session" } },
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/AuthVerifyRequest" } } },
+          },
+          responses: {
+            200: { description: "Short-lived current-owner session" },
+            400: { description: "Missing or invalid challenge ID or signature" },
+          },
         },
       },
       "/v1/tools/{tool}": {
@@ -399,6 +437,8 @@ export function buildOpenApi(config) {
         },
         RenewalRequest: renewalRequestSchema(),
         RenewalResponse: renewalResponseSchema(),
+        AuthChallengeRequest: authChallengeRequestSchema(),
+        AuthVerifyRequest: authVerifyRequestSchema(),
       },
     },
   };

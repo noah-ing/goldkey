@@ -180,6 +180,30 @@ function renewalRequestSchema() {
   };
 }
 
+function authChallengeRequestSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["wallet", "token_id"],
+    properties: {
+      wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      token_id: { type: "string", pattern: "^[1-9][0-9]*$" },
+    },
+  };
+}
+
+function authVerifyRequestSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["challenge_id", "signature"],
+    properties: {
+      challenge_id: { type: "string", format: "uuid" },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+    },
+  };
+}
+
 function proxied(description, extras = {}) {
   return {
     description: `${description} This stateful route is forwarded to ORIGIN_API and may cold-start.`,
@@ -260,10 +284,10 @@ export function buildOpenApi(config) {
         },
       },
       "/v1/auth/challenge": {
-        post: { tags: ["origin"], operationId: "goldkey_auth_challenge", ...proxied("Request an exact wallet-signature challenge.", { requestBody: { required: true, content: { "application/json": { schema: jsonObject } } }, responses: { 200: { description: "Signature challenge" }, 502: { description: "Origin unavailable" } } }) },
+        post: { tags: ["origin"], operationId: "goldkey_auth_challenge", ...proxied("Request an exact wallet-signature challenge.", { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AuthChallengeRequest" } } } }, responses: { 200: { description: "Signature challenge" }, 400: { description: "Missing or invalid wallet or token ID" }, 502: { description: "Origin unavailable" } } }) },
       },
       "/v1/auth/verify": {
-        post: { tags: ["origin"], operationId: "goldkey_auth_verify", ...proxied("Verify a signed challenge and issue a short-lived session.", { requestBody: { required: true, content: { "application/json": { schema: jsonObject } } }, responses: { 200: { description: "Session issued" }, 502: { description: "Origin unavailable" } } }) },
+        post: { tags: ["origin"], operationId: "goldkey_auth_verify", ...proxied("Verify a signed challenge and issue a short-lived session.", { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AuthVerifyRequest" } } } }, responses: { 200: { description: "Session issued" }, 400: { description: "Missing or invalid challenge ID or signature" }, 502: { description: "Origin unavailable" } } }) },
       },
       "/v1/quota": {
         get: { tags: ["origin"], operationId: "goldkey_quota", security: [{ bearerAuth: [] }], ...proxied("Read current shared quota.", { responses: { 200: { description: "Quota state" }, 502: { description: "Origin unavailable" } } }) },
@@ -309,6 +333,8 @@ export function buildOpenApi(config) {
         CommerceRequest: commerceRequestSchema(),
         CommerceResponse: commerceResponseSchema(),
         RenewalRequest: renewalRequestSchema(),
+        AuthChallengeRequest: authChallengeRequestSchema(),
+        AuthVerifyRequest: authVerifyRequestSchema(),
         PaygoResponse: paygoResponseSchema(),
       },
     },

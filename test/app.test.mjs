@@ -113,6 +113,17 @@ test("wallet challenge is single-use and produces a usable owner session", async
   assert.equal(staleSession.body.error.code, "stale_session");
 });
 
+test("bodyless authentication probes return field errors instead of internal errors", async (t) => {
+  const { base } = await fixture(t);
+  const challenge = await json(await fetch(`${base}/v1/auth/challenge`, { method: "POST" }));
+  assert.equal(challenge.response.status, 400);
+  assert.equal(challenge.body.error.code, "invalid_wallet");
+
+  const verify = await json(await fetch(`${base}/v1/auth/verify`, { method: "POST" }));
+  assert.equal(verify.response.status, 400);
+  assert.equal(verify.body.error.code, "invalid_challenge");
+});
+
 test("commerce endpoint sells only above break-even and disabled paygo never leaks free calls", async (t) => {
   const { base } = await fixture(t);
   const quote = await json(await fetch(`${base}/v1/commerce/respond`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ forecast_calls: 7200 }) }));

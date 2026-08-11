@@ -216,6 +216,10 @@ test("health, terms, schema, OpenAPI, agent card, catalog, and demo never touch 
   assert.equal(openapi.paths["/v1/purchase/quote"].post.responses[200].content["application/json"].schema.$ref, "#/components/schemas/CommerceResponse");
   assert.ok(openapi.components.schemas.CommerceResponse.required.includes("recommendation"));
   assert.ok(openapi.components.schemas.CommerceResponse.required.includes("unsigned_transactions"));
+  assert.deepEqual(openapi.components.schemas.AuthChallengeRequest.required, ["wallet", "token_id"]);
+  assert.deepEqual(openapi.components.schemas.AuthVerifyRequest.required, ["challenge_id", "signature"]);
+  assert.equal(openapi.paths["/v1/auth/challenge"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/AuthChallengeRequest");
+  assert.equal(openapi.paths["/v1/auth/verify"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/AuthVerifyRequest");
   assert.deepEqual(openapi.components.schemas.PaygoResponse.required, ["request_id", "tool", "tool_version", "input_sha256", "result", "payment", "upgrade"]);
   for (const ref of collectRefs(openapi)) {
     assert.match(ref, /^#\//, `${ref} must be a local OpenAPI reference`);
