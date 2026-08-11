@@ -18,6 +18,7 @@ const TERMS_HASH = `0x${"ab".repeat(32)}`;
 const termsAsset = readFileSync(`${EDGE_ROOT}/public/TERMS.md`);
 const schemaAsset = readFileSync(`${EDGE_ROOT}/public/schemas/commerce-response-v1.json`);
 const demoAsset = readFileSync(`${EDGE_ROOT}/public/demo.json`);
+const homepageAsset = readFileSync(`${EDGE_ROOT}/public/index.html`);
 
 function env(overrides = {}) {
   return {
@@ -35,6 +36,7 @@ function env(overrides = {}) {
         if (pathname === "/TERMS.md") return new Response(termsAsset);
         if (pathname === "/schemas/commerce-response-v1.json") return new Response(schemaAsset);
         if (pathname === "/demo.json") return new Response(demoAsset);
+        if (pathname === "/index.html") return new Response(homepageAsset);
         return new Response("not found", { status: 404 });
       },
     },
@@ -158,6 +160,50 @@ test("deployed static artifacts are byte-identical to canonical terms and schema
   assert.deepEqual(termsAsset, readFileSync(`${PACKAGE_ROOT}/TERMS.md`));
   assert.deepEqual(schemaAsset, readFileSync(`${PACKAGE_ROOT}/agent/goldkey-commerce-response.schema.json`));
   assert.equal(JSON.parse(schemaAsset).$id, "urn:goldkey:schema:commerce-response:v1");
+});
+
+test("root storefront serves the honest Guard founding offer for exact GET and HEAD only", async () => {
+  const assetRequests = [];
+  const homepageAssets = {
+    async fetch(request) {
+      assetRequests.push({ pathname: new URL(request.url).pathname, method: request.method });
+      if (new URL(request.url).pathname === "/index.html") return new Response(homepageAsset);
+      return new Response("not found", { status: 404 });
+    },
+  };
+  const worker = createWorker();
+
+  const getResponse = await worker.fetch(new Request("https://edge.example/"), env({ ASSETS: homepageAssets }));
+  assert.equal(getResponse.status, 200);
+  assert.equal(getResponse.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(getResponse.headers.get("cache-control"), "public, max-age=300");
+  assert.equal(getResponse.headers.get("x-frame-options"), "DENY");
+  assert.match(getResponse.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  const html = await getResponse.text();
+  assert.match(html, /Founding design-partner beta/i);
+  assert.match(html, /No receipt[\s\S]*No execution/i);
+  assert.match(html, /\$1,000/);
+  assert.match(html, /\$0\.05/);
+  assert.match(html, /\$0\.10/);
+  assert.match(html, /must have no direct credential, signer, or network route that bypasses the local enforcer/i);
+  assert.match(html, /https:\/\/github\.com\/noah-ing\/goldkey\/issues\/new\?/);
+  assert.doesNotMatch(html, /testimonial|trusted by|customers protected/i);
+
+  const headResponse = await worker.fetch(new Request("https://edge.example/", { method: "HEAD" }), env({ ASSETS: homepageAssets }));
+  assert.equal(headResponse.status, 200);
+  assert.equal(headResponse.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(await headResponse.text(), "");
+
+  const postResponse = await worker.fetch(new Request("https://edge.example/", { method: "POST" }), env({ ASSETS: homepageAssets }));
+  assert.equal(postResponse.status, 405);
+  assert.equal(postResponse.headers.get("allow"), "GET, HEAD");
+
+  const assetNearMiss = await worker.fetch(new Request("https://edge.example/index.html"), env({ ASSETS: homepageAssets }));
+  assert.equal(assetNearMiss.status, 404);
+  assert.deepEqual(assetRequests, [
+    { pathname: "/index.html", method: "GET" },
+    { pathname: "/index.html", method: "GET" },
+  ]);
 });
 
 test("domain skill discovery serves only the exact index and integrity-pinned archive paths", async () => {

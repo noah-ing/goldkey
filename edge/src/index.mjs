@@ -138,7 +138,7 @@ async function proxyToOrigin(request, env, fetchImpl, { guard = false } = {}) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
 }
 
-async function asset(env, request, assetPath, contentType) {
+async function asset(env, request, assetPath, contentType, { headOnly = false, headers: extraHeaders = {} } = {}) {
   assert(env.ASSETS && typeof env.ASSETS.fetch === "function", 503, "assets_unavailable", "Static edge assets are unavailable");
   const url = new URL(request.url);
   url.pathname = assetPath;
@@ -148,7 +148,8 @@ async function asset(env, request, assetPath, contentType) {
   const headers = new Headers(response.headers);
   headers.set("content-type", contentType);
   headers.set("cache-control", "public, max-age=300");
-  return new Response(response.body, { status: 200, headers });
+  for (const [name, value] of Object.entries(extraHeaders)) headers.set(name, value);
+  return new Response(headOnly ? null : response.body, { status: 200, headers });
 }
 
 function configCacheKey(config) {
@@ -212,6 +213,20 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
         commerce_configured: isCommerceConfigured(request, env),
         origin_checked: false,
       }, 200, { "cache-control": "no-store" });
+    }
+
+    if (pathname === "/" && (method === "GET" || method === "HEAD")) {
+      return asset(env, request, "/index.html", "text/html; charset=utf-8", {
+        headOnly: method === "HEAD",
+        headers: {
+          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
+          "x-frame-options": "DENY",
+        },
+      });
+    }
+    if (pathname === "/") {
+      return json({ error: { code: "method_not_allowed", message: "Method not allowed" } }, 405, { allow: "GET, HEAD", "cache-control": "no-store" });
     }
 
     const distributionContentType = DISTRIBUTION_ASSETS.get(pathname);
