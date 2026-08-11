@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFacilitatorSupport, validateX402Facilitator } from "../src/x402.mjs";
+import { assertFacilitatorSupport, buildX402Routes, validateX402Facilitator } from "../src/x402.mjs";
 
 const config = Object.freeze({ chainId: 8453, x402Enabled: true });
 
@@ -41,4 +41,22 @@ test("x402 startup skips facilitator calls when paygo is disabled", async () => 
     },
   });
   assert.deepEqual(result, { enabled: false });
+});
+
+test("x402 binds payment and Bazaar discovery to the permanent public origin", () => {
+  const routes = buildX402Routes({
+    chainId: 8453,
+    publicOrigin: "https://goldkey-edge-storefront.noah-ing.workers.dev",
+    treasuryAddress: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b",
+  });
+  const route = routes["POST /v1/paygo/execute"];
+
+  assert.equal(route.resource, "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/paygo/execute");
+  assert.deepEqual(route.accepts, [{
+    scheme: "exact",
+    price: "$0.01",
+    network: "eip155:8453",
+    payTo: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b",
+  }]);
+  assert.ok(route.extensions?.bazaar);
 });

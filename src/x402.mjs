@@ -40,10 +40,8 @@ export async function validateX402Facilitator(config, facilitator = createFacili
   return Object.freeze({ enabled: true, ...assertFacilitatorSupport(supported, config) });
 }
 
-export function createX402Middleware(config) {
-  const facilitator = createFacilitator(config);
+export function buildX402Routes(config) {
   const network = `eip155:${config.chainId}`;
-  const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
   const discovery = declareDiscoveryExtension({
     method: "POST",
     bodyType: "json",
@@ -58,10 +56,19 @@ export function createX402Middleware(config) {
   const routes = {
     "POST /v1/paygo/execute": {
       accepts: [{ scheme: "exact", price: "$0.01", network, payTo: config.treasuryAddress }],
+      resource: `${config.publicOrigin}/v1/paygo/execute`,
       description: "Execute one deterministic GoldKey agent utility without buying a pass.",
       mimeType: "application/json",
       extensions: discovery,
     },
   };
+  return routes;
+}
+
+export function createX402Middleware(config) {
+  const facilitator = createFacilitator(config);
+  const network = `eip155:${config.chainId}`;
+  const resourceServer = new x402ResourceServer(facilitator).register(network, new ExactEvmScheme());
+  const routes = buildX402Routes(config);
   return paymentMiddleware(routes, resourceServer);
 }
