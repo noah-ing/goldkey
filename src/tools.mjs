@@ -337,12 +337,39 @@ function validateValueAgainstSchema(value, schema, { cache = false } = {}) {
   }
 }
 
+export function normalizeBoundedJsonSchema(schema, { cache = false } = {}) {
+  requireObject(schema, "schema");
+  let serialized;
+  try {
+    serialized = JSON.stringify(schema);
+  } catch (error) {
+    throw new ServiceError(400, "invalid_schema", `schema must be JSON: ${error.message}`);
+  }
+  assert(Buffer.byteLength(serialized) <= MAX_SCHEMA_BYTES, 413, "schema_too_large", `schema exceeds ${MAX_SCHEMA_BYTES} bytes`);
+  assertSafeSchema(schema);
+  try {
+    const canonicalSchema = canonicalize(schema);
+    assert(Buffer.byteLength(canonicalSchema) <= MAX_SCHEMA_BYTES, 413, "schema_too_large", `schema exceeds ${MAX_SCHEMA_BYTES} bytes`);
+    const normalized = JSON.parse(canonicalSchema);
+    // Compile during normalization so unsafe or unsupported schemas fail when
+    // an operator registers policy, never later in an authorization path.
+    compiledValidator(normalized, { cache });
+    return Object.freeze(normalized);
+  } catch (error) {
+    if (error instanceof ServiceError) throw error;
+    throw new ServiceError(400, "invalid_schema", error.message);
+  }
+}
+
+export function validateBoundedJsonSchemaValue(value, schema, { cache = true } = {}) {
+  const normalizedSchema = normalizeBoundedJsonSchema(schema, { cache });
+  return validateValueAgainstSchema(value, normalizedSchema, { cache });
+}
+
 function runValidate(input) {
   requireObject(input);
-  requireObject(input.schema, "schema");
-  assert(Buffer.byteLength(JSON.stringify(input.schema)) <= MAX_SCHEMA_BYTES, 413, "schema_too_large", `schema exceeds ${MAX_SCHEMA_BYTES} bytes`);
-  assertSafeSchema(input.schema);
-  return validateValueAgainstSchema(input.value, input.schema);
+  const schema = normalizeBoundedJsonSchema(input.schema);
+  return validateValueAgainstSchema(input.value, schema);
 }
 
 function runPromptScan(input) {

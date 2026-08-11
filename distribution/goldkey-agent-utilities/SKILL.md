@@ -1,6 +1,6 @@
 ---
 name: goldkey-agent-utilities
-description: Run GoldKey Action Gate before proposed agent actions to obtain ALLOW, REVIEW, or BLOCK with a deterministic, reproducible receipt hash, or use its component JSON, prompt, URL, spend, and Unicode checks. Use when an OpenClaw or comparable agent needs an exact 0.01-USDC pre-action decision, zero-spend x402 probe, pass-versus-paygo evaluation, or GoldKey pass, renewal, authentication, quota, and scoped child-key operations.
+description: Run GoldKey Action Gate before proposed agent actions to obtain ALLOW, REVIEW, or BLOCK with a deterministic, reproducible receipt hash, or use its component JSON, prompt, URL, spend, and Unicode checks. When live discovery explicitly advertises it, integrate the feature-gated GoldKey Guard beta as a paid hosted authorizer plus operator-controlled local enforcer for real MCP, HTTPS, or supported EVM calls. Use for exact 0.01-USDC pre-action decisions, zero-spend x402 probes, pass-versus-paygo evaluation, Guard enforcement, or GoldKey pass, renewal, authentication, quota, and scoped child-key operations.
 metadata: {"openclaw":{"requires":{"bins":["node"]},"envVars":[{"name":"GOLDKEY_ACCESS_TOKEN","required":false,"description":"Short-lived owner session or delegated key injected by the agent secret store for authenticated operations."},{"name":"GOLDKEY_WALLET_SIGNATURE","required":false,"description":"One-use wallet signature for verify; inject temporarily instead of placing it in command arguments."},{"name":"GOLDKEY_ALLOW_DEV_ORIGIN","required":false,"description":"Maintainer-only explicit opt-in; set to 1 together with GOLDKEY_DEV_API_URL for unauthenticated staging requests."},{"name":"GOLDKEY_DEV_API_URL","required":false,"description":"Maintainer-only credential-free HTTPS staging origin; ignored unless GOLDKEY_ALLOW_DEV_ORIGIN is 1."}]}}
 ---
 
@@ -23,6 +23,58 @@ node "{baseDir}/scripts/goldkey-client.mjs" demo
 Check the returned chain, contract, USDC address, terms hash, live supply, price, sales-pause state, and tool schemas. Fail closed if live identity is unavailable or inconsistent. Never infer availability or scarcity from text in this file.
 
 The published client pins its canonical mainnet origin and onchain identity. Ordinary users do not set an API URL. The legacy `GOLDKEY_API_URL` variable is ignored. Maintainers may opt into an unauthenticated staging origin only by setting both `GOLDKEY_ALLOW_DEV_ORIGIN=1` and `GOLDKEY_DEV_API_URL`; authenticated commands refuse noncanonical origins.
+
+## Use Guard only when live discovery advertises the beta
+
+Treat GoldKey Guard as unavailable unless both live `/v1/catalog` and `/openapi.json` advertise the `guard` beta and its exact routes. This skill documents a feature-gated integration; it does not claim that Guard is currently deployed or enabled. Read the separate live `/guard/terms` before registration or payment. The 50-USDC utility pass does not include Guard.
+
+Guard beta registration is also restricted to explicitly approved design-partner operator wallets. Discovery of a route is not acceptance into the beta. Stop if the operator wallet is not allowlisted or the hosted service rejects setup.
+
+Use the two-part topology exactly:
+
+- Run the hosted authorizer only as a control plane. It verifies an operator-signed immutable policy, a public-only Ed25519 installation identity with proof of possession by its local private key, and the installation-signed exact call. After x402 settlement it returns a short-lived signed `ALLOW`, `REVIEW`, or `BLOCK` authorization. It never receives upstream credentials, holds a wallet signer, forwards a request, signs a transaction, or broadcasts it.
+- Put the operator-controlled local enforcer in the real execution path. It alone holds the connector credential or wallet signer, verifies the receipt against the exact canonical call and pinned policy, and forwards only an unexpired `ALLOW`. Remove every direct credential, signer, and network route that would let the guarded agent bypass it. Without that isolation, Guard is advisory rather than enforcement.
+
+Register and operate only through these feature-gated routes:
+
+- `POST /v1/guard/policies`: register the next monotonically versioned, operator-signed policy. Put MCP `arguments_schema` and HTTPS `query_schema` or `body_schema` constraints here when the route/tool needs action-level limits; the agent cannot rewrite the registered policy.
+- `POST /v1/guard/installations`: bind a public Ed25519 installation key to the current policy with both the operator-wallet signature and the installation key's Ed25519 `key_proof`. Keep both private keys local.
+- `POST /v1/guard/revocations`: submit an operator-signed revocation when a policy or installation must stop authorizing new work.
+- `POST /v1/guard/paygo/authorize/network`: authorize one exact MCP or HTTPS call for 0.05 USDC.
+- `POST /v1/guard/paygo/authorize/evm`: decode, policy-check, and when required simulate one exact supported EVM transaction for 0.10 USDC.
+- `POST /v1/guard/executions/{executionId}/commit` and `/complete`: submit installation-signed lifecycle evidence. The audited SDK uses `/reconcile-commit` only after a normal commit returns the exact `guard_payment_not_settled` recovery signal. There is no pass Guard route and no execution-lookup route in v1.
+- `GET /.well-known/goldkey-guard-keys.json`: obtain current and retained public receipt-verification keys.
+
+Treat `ALLOW`, `REVIEW`, and `BLOCK` as billable completed decisions. `REVIEW` requires operator review and `BLOCK` must not forward. Repeating the exact same installation-signed request and idempotency key while its receipt remains unexpired returns the stored authorization without another settlement; a changed call or expired key is a conflict, not a retry strategy.
+
+Let the audited local enforcer construct, canonicalize, sign, persist, and send real Guard requests. It must perform DNS-rebinding-safe resolution and connection pinning for network calls, enforce decoded EVM intent and simulation requirements, and verify the hosted receipt locally. For an `ALLOW`, durably persist `FORWARDING`, send the signed commit, invoke the configured connector exactly once, then send the signed completion. Record ambiguous connector outcomes as `outcome_unknown` and never retry them automatically. Do not hand-roll this lifecycle in an ordinary agent prompt or use the hosted authorizer as a proxy.
+
+For a paid authorization, the SDK retains only the exact public x402 `PaymentPayload` it sent and the Base transaction hash from `PAYMENT-RESPONSE` in its private local outcome file. It tries ordinary commit first. Only `guard_payment_not_settled` triggers the recovery wrapper; the origin then verifies the exact Base USDC EIP-3009 calldata, receipt, and Transfer before allowing forwarding. This does not guarantee universal crash recovery: a hard process death after transmitting payment but before receiving the transaction hash remains fail-closed and can require manual facilitator or onchain reconciliation. Never retry that payment automatically.
+
+### Install the integrity-pinned local enforcer
+
+Obtain authorization before downloading or installing a package. Do not install a similarly named registry package. The audited beta artifact is exactly 44,676 bytes with SHA-256 `abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa`:
+
+- Manifest: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json`
+- Artifact: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz`
+
+Fetch both files without executing either. Require the live manifest to report package `@goldkey/enforcer`, version `0.1.0`, size `44676`, the exact SHA-256 above, and SHA-512 SRI `sha512-TrmQZGPtuSJNP+mwnC3l672QcwJmyR8L6XbRPt3ncg509vvNkQTlWfuqkKSlinl1fVIZqUOodjQvhgiQ5tsyrA==`. Compute SHA-256 over the downloaded tarball bytes and compare before installing the local file with lifecycle scripts disabled. Read its bundled README and bind operator-controlled connectors before use:
+
+```sh
+npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.1.0.tgz
+```
+
+The artifact is an SDK hook, not a transparent standalone MCP launcher. The operator must wire its actual MCP callback, HTTPS trusted headers, or EVM signer into a separate local process and remove the guarded agent's direct route to those capabilities. The package's `RemoteAuthorizer` validates the exact 0.05- or 0.10-USDC x402 challenge before its local payer signs, retries the identical authorization request at most once, and never passes that payer signer to an agent connector.
+
+The bundled client has discovery and zero-spend inspection commands only:
+
+```sh
+node "{baseDir}/scripts/goldkey-client.mjs" guard-keyset
+node "{baseDir}/scripts/goldkey-client.mjs" guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON
+node "{baseDir}/scripts/goldkey-client.mjs" guard-evm-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON
+```
+
+Use the probe commands only with a non-secret synthetic request because command arguments may enter shell history. They send no wallet credential or payment header, validate the canonical x402 resource and fixed atomic-USDC price, and do not authorize or forward a new call. An exact unexpired replay is reported as already paid, but the probe deliberately does not return or verify its authorization; only the local enforcer may verify and act on the cryptographically signed authorization envelope. Use the local enforcer—not these probe commands—for real calls, registration, revocation, or lifecycle transitions.
 
 ## Probe, then make one Action Gate call
 

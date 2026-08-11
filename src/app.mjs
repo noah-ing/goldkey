@@ -13,6 +13,10 @@ function asyncRoute(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res)).catch(next);
 }
 
+function asyncMiddleware(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
 function challengeRateLimiter() {
   const buckets = new Map();
   let requestsSinceSweep = 0;
@@ -29,6 +33,26 @@ function challengeRateLimiter() {
     bucket.count += 1;
     buckets.set(key, bucket);
     if (bucket.count > 20) return next(new ServiceError(429, "rate_limited", "Too many authentication challenges"));
+    next();
+  };
+}
+
+function guardRegistrationRateLimiter() {
+  const buckets = new Map();
+  let requestsSinceSweep = 0;
+  return (req, _res, next) => {
+    const now = Date.now();
+    requestsSinceSweep += 1;
+    if (requestsSinceSweep >= 500) {
+      for (const [bucketKey, value] of buckets) if (value.resetAt <= now) buckets.delete(bucketKey);
+      requestsSinceSweep = 0;
+    }
+    const key = req.ip ?? "unknown";
+    const previous = buckets.get(key);
+    const bucket = !previous || previous.resetAt <= now ? { count: 0, resetAt: now + 60_000 } : previous;
+    bucket.count += 1;
+    buckets.set(key, bucket);
+    if (bucket.count > 10) return next(new ServiceError(429, "guard_registration_rate_limited", "Too many Guard registration requests"));
     next();
   };
 }
@@ -61,9 +85,32 @@ function assertValidToolEnvelope(tool, input) {
   );
 }
 
-export function createApp({ config, db, chain, auth, x402Middleware }) {
+export function createGuardBeforeSettlementRecheck(guard) {
+  if (!guard || typeof guard.beginPaymentSettlement !== "function") throw new TypeError("guard.beginPaymentSettlement must be a function");
+  return ({ path, body, claimId, paymentPayload, requirements }) => {
+    if (path === "/v1/guard/paygo/authorize/network") {
+      return guard.beginPaymentSettlement(body, ["mcp_tool", "https"], claimId, { path, paymentPayload, requirements });
+    }
+    if (path === "/v1/guard/paygo/authorize/evm") {
+      return guard.beginPaymentSettlement(body, ["evm_transaction"], claimId, { path, paymentPayload, requirements });
+    }
+    throw new Error("Unsupported Guard settlement path");
+  };
+}
+
+function guardSettlementKinds(path) {
+  if (path === "/v1/guard/paygo/authorize/network") return ["mcp_tool", "https"];
+  if (path === "/v1/guard/paygo/authorize/evm") return ["evm_transaction"];
+  throw new Error("Unsupported Guard settlement path");
+}
+
+export function createApp({ config, db, chain, auth, guard, x402Middleware }) {
   const app = express();
+  if (config.guardEnabled && !guard) throw new Error("Guard service is required when GUARD_ENABLED is true");
   const termsDocument = readFileSync(new URL("../TERMS.md", import.meta.url), "utf8");
+  const guardTermsDocument = config.guardEnabled
+    ? readFileSync(new URL("../GUARD_TERMS.md", import.meta.url), "utf8")
+    : undefined;
   const commerceResponseSchema = JSON.parse(readFileSync(new URL("../agent/goldkey-commerce-response.schema.json", import.meta.url), "utf8"));
   let supplyCache;
   let supplyPromise;
@@ -125,7 +172,37 @@ export function createApp({ config, db, chain, auth, x402Middleware }) {
         next(error);
       }
     });
-    app.use(x402Middleware ?? createX402Middleware(config));
+    if (config.guardEnabled) {
+      const guardAuthorizationPreflight = (expectedKinds) => asyncMiddleware(async (req, res, next) => {
+        if (isUnpaidX402DiscoveryProbe(req)) return next();
+        assert(req.method === "POST" && req.body && typeof req.body === "object" && !Array.isArray(req.body), 400, "invalid_guard_request", "Guard authorization request must be an object");
+        req.guardPreflight = await guard.preflight(req.body, expectedKinds);
+        if (req.guardPreflight.replay_authorization) {
+          res.set("x-goldkey-idempotent-replay", "true");
+          return res.json(req.guardPreflight.replay_authorization);
+        }
+        next();
+      });
+      app.use("/v1/guard/paygo/authorize/network", guardAuthorizationPreflight(["mcp_tool", "https"]));
+      app.use("/v1/guard/paygo/authorize/evm", guardAuthorizationPreflight(["evm_transaction"]));
+    }
+    app.use(x402Middleware ?? createX402Middleware(config, {
+      onGuardBeforeSettlement: config.guardEnabled
+        ? createGuardBeforeSettlementRecheck(guard)
+        : undefined,
+      onGuardSettlement: config.guardEnabled
+        ? ({ path, body, result, claimId, paymentPayload, requirements }) => guard.recordPaymentSettlement(
+            body,
+            result,
+            guardSettlementKinds(path),
+            claimId,
+            { path, paymentPayload, requirements },
+          )
+        : undefined,
+      onGuardSettlementFailure: config.guardEnabled
+        ? ({ path, body, claimId, error }) => guard.cancelPaymentSettlement(body, guardSettlementKinds(path), claimId, { error })
+        : undefined,
+    }));
   }
 
   app.get("/healthz", (_req, res) => res.json({ ok: true, service: "goldkey", version: "1.0.0" }));
@@ -146,6 +223,48 @@ export function createApp({ config, db, chain, auth, x402Middleware }) {
     res.json(commerceResponseSchema);
   });
   app.get("/openapi.json", (_req, res) => res.json(buildOpenApi(config)));
+  if (config.guardEnabled) {
+    const registrationLimiter = guardRegistrationRateLimiter();
+    app.get("/guard/terms", (_req, res) => {
+      res.set("Cache-Control", "public, max-age=300");
+      res.type("text/markdown").send(guardTermsDocument);
+    });
+    app.get("/.well-known/goldkey-guard-keys.json", (_req, res) => {
+      res.set("Cache-Control", "public, max-age=60");
+      res.json(guard.keyset);
+    });
+    app.post("/v1/guard/policies", registrationLimiter, asyncRoute(async (req, res) => {
+      const registered = await guard.registerPolicy(req.body);
+      res.status(registered.replay ? 200 : 201).json(registered);
+    }));
+    app.post("/v1/guard/installations", registrationLimiter, asyncRoute(async (req, res) => {
+      const registered = await guard.registerInstallation(req.body);
+      res.status(registered.replay ? 200 : 201).json(registered);
+    }));
+    app.post("/v1/guard/revocations", registrationLimiter, asyncRoute(async (req, res) => {
+      res.json(await guard.revoke(req.body));
+    }));
+    app.post("/v1/guard/paygo/authorize/network", asyncRoute(async (req, res) => {
+      const authorization = await guard.authorize(req.body, ["mcp_tool", "https"]);
+      res.json(authorization);
+    }));
+    app.post("/v1/guard/paygo/authorize/evm", asyncRoute(async (req, res) => {
+      const authorization = await guard.authorize(req.body, ["evm_transaction"]);
+      res.json(authorization);
+    }));
+    app.post("/v1/guard/executions/:executionId/commit", asyncRoute(async (req, res) => {
+      assert(req.body?.execution_id === req.params.executionId, 409, "guard_lifecycle_mismatch", "Commit execution_id must match the route");
+      res.json(await guard.commit(req.body));
+    }));
+    app.post("/v1/guard/executions/:executionId/reconcile-commit", asyncRoute(async (req, res) => {
+      assert(req.body?.commit?.execution_id === req.params.executionId, 409, "guard_lifecycle_mismatch", "Reconciled commit execution_id must match the route");
+      res.json(await guard.reconcileCommit(req.body));
+    }));
+    app.post("/v1/guard/executions/:executionId/complete", asyncRoute(async (req, res) => {
+      assert(req.body?.execution_id === req.params.executionId, 409, "guard_lifecycle_mismatch", "Completion execution_id must match the route");
+      res.json(await guard.complete(req.body));
+    }));
+  }
   app.get("/.well-known/goldkey.json", asyncRoute(async (_req, res) => res.json(await buildOffer(config, { supplyState: currentSupply }))));
   app.get("/.well-known/agent.json", asyncRoute(async (_req, res) => res.json({
     name: "GoldKey Commerce Agent",
@@ -154,7 +273,19 @@ export function createApp({ config, db, chain, auth, x402Middleware }) {
     openapi: `${config.publicOrigin}/openapi.json`,
     decision_rule: "Buy only when risk-adjusted expected paygo cost exceeds pass cost.",
   })));
-  app.get("/v1/catalog", (_req, res) => res.json({ tools: catalog(), pricing: { paygo_per_call_usdc: "0.01", pass_price_usdc: "50.00", calls_per_pass: 10_000 } }));
+  app.get("/v1/catalog", (_req, res) => res.json({
+    tools: catalog(),
+    pricing: {
+      paygo_per_call_usdc: "0.01",
+      pass_price_usdc: "50.00",
+      calls_per_pass: 10_000,
+      guard: config.guardEnabled ? {
+        mcp_or_https_authorization_usdc: config.guardNetworkPriceUsd,
+        evm_authorization_usdc: config.guardEvmPriceUsd,
+        pass_included: false,
+      } : undefined,
+    },
+  }));
 
   app.get("/metadata/:tokenId", asyncRoute(async (req, res) => {
     assert(/^[1-9]\d*$/.test(req.params.tokenId), 400, "invalid_token_id", "tokenId must be a canonical positive integer string");

@@ -167,3 +167,45 @@ export function catalog() {
     paygo_price_usdc: "0.01",
   }));
 }
+
+export function guardCatalog(publicOrigin) {
+  return {
+    product: "GoldKey Guard",
+    status: "beta",
+    availability: "feature_gated",
+    pass_included: false,
+    description: "Paid signed authorization for exact MCP, HTTPS, or supported EVM calls. The hosted authorizer evaluates operator-signed policy and never forwards; a customer-controlled local enforcer holds credentials or signing authority and forwards only an unexpired ALLOW.",
+    pricing: {
+      mcp_or_https_authorization_usdc: "0.05",
+      evm_authorization_usdc: "0.10",
+      decisions_billed: ["ALLOW", "REVIEW", "BLOCK"],
+      exact_unexpired_idempotent_replay_billed: false,
+    },
+    topology: {
+      hosted_authorizer: "Verifies signed policy, installation, exact call, and payment; returns a signed short-lived decision receipt; never receives upstream credentials and never forwards, signs, or broadcasts the action.",
+      local_enforcer: "Operator-controlled execution-path component that alone holds the upstream credential or wallet signer, verifies the receipt against the exact call and pinned policy, commits FORWARDING, and then invokes the configured connector.",
+      enforcement_requirement: "The guarded agent must have no direct credential, signer, or network path that bypasses the local enforcer.",
+    },
+    distribution: {
+      package: "@goldkey/enforcer",
+      version: "0.1.0",
+      artifact: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz`,
+      integrity_manifest: `${publicOrigin}/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json`,
+      size_bytes: 44676,
+      sha256: "abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa",
+      install_policy: "Download, verify bytes against the pinned digest, then install the local tarball with lifecycle scripts disabled. Do not install a similarly named registry package.",
+    },
+    routes: {
+      terms: `${publicOrigin}/guard/terms`,
+      policy_registration: `${publicOrigin}/v1/guard/policies`,
+      installation_registration: `${publicOrigin}/v1/guard/installations`,
+      revocation: `${publicOrigin}/v1/guard/revocations`,
+      network_authorization: `${publicOrigin}/v1/guard/paygo/authorize/network`,
+      evm_authorization: `${publicOrigin}/v1/guard/paygo/authorize/evm`,
+      commit_template: `${publicOrigin}/v1/guard/executions/{executionId}/commit`,
+      reconcile_commit_template: `${publicOrigin}/v1/guard/executions/{executionId}/reconcile-commit`,
+      complete_template: `${publicOrigin}/v1/guard/executions/{executionId}/complete`,
+      receipt_keyset: `${publicOrigin}/.well-known/goldkey-guard-keys.json`,
+    },
+  };
+}

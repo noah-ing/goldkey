@@ -121,6 +121,41 @@ test("distribution skill leads with Action Gate and keeps interface metadata ali
   assert.match(metadata, /default_prompt: "Use \$goldkey-agent-utilities to probe or run the \$0\.01 Action Gate before a proposed agent action\."/);
 });
 
+test("distribution skill describes Guard as feature-gated hosted authorization plus local enforcement", async () => {
+  const source = await readFile(skillPath, "utf8");
+
+  assert.match(source, /Treat GoldKey Guard as unavailable unless both live `\/v1\/catalog` and `\/openapi\.json` advertise the `guard` beta/);
+  assert.match(source, /does not claim that Guard is currently deployed or enabled/);
+  assert.match(source, /separate live `\/guard\/terms`/);
+  assert.match(source, /50-USDC utility pass does not include Guard/);
+  assert.match(source, /hosted authorizer only as a control plane/);
+  assert.match(source, /never receives upstream credentials, holds a wallet signer, forwards a request, signs a transaction, or broadcasts it/);
+  assert.match(source, /operator-controlled local enforcer in the real execution path/);
+  assert.match(source, /restricted to explicitly approved design-partner operator wallets/);
+  assert.match(source, /installation key's Ed25519 `key_proof`/);
+  assert.match(source, /MCP `arguments_schema` and HTTPS `query_schema` or `body_schema`/);
+  assert.match(source, /Without that isolation, Guard is advisory rather than enforcement/);
+  assert.match(source, /`POST \/v1\/guard\/revocations`/);
+  assert.match(source, /authorize one exact MCP or HTTPS call for 0\.05 USDC/);
+  assert.match(source, /supported EVM transaction for 0\.10 USDC/);
+  assert.match(source, /There is no pass Guard route and no execution-lookup route in v1/);
+  assert.match(source, /`ALLOW`, `REVIEW`, and `BLOCK` as billable completed decisions/);
+  assert.match(source, /stored authorization without another settlement/);
+  assert.match(source, /DNS-rebinding-safe resolution and connection pinning/);
+  assert.match(source, /durably persist `FORWARDING`, send the signed commit, invoke the configured connector exactly once, then send the signed completion/);
+  assert.match(source, /`outcome_unknown` and never retry them automatically/);
+  assert.match(source, /Only `guard_payment_not_settled` triggers the recovery wrapper/);
+  assert.match(source, /hard process death after transmitting payment but before receiving the transaction hash remains fail-closed/);
+  assert.match(source, /abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa/);
+  assert.match(source, /sha512-TrmQZGPtuSJNP\+mwnC3l672QcwJmyR8L6XbRPt3ncg509vvNkQTlWfuqkKSlinl1fVIZqUOodjQvhgiQ5tsyrA==/);
+  assert.match(source, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.1\.0\.tgz/);
+  assert.match(source, /SDK hook, not a transparent standalone MCP launcher/);
+  assert.match(source, /guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON/);
+  assert.match(source, /Use the probe commands only with a non-secret synthetic request because command arguments may enter shell history/);
+  assert.match(source, /probe deliberately does not return or verify its authorization/);
+  assert.match(source, /Use the local enforcer—not these probe commands—for real calls, registration, revocation, or lifecycle transitions/);
+});
+
 test("distribution skill exposes a zero-spend probe and bounded opt-in AgentCash settlement path", async () => {
   const source = await readFile(skillPath, "utf8");
   const endpoint = "https://goldkey-edge-storefront.noah-ing.workers.dev/v1/action-gate";
@@ -269,6 +304,123 @@ test("paygo probe rejects payment substitution before returning a challenge", as
       pattern,
     );
   }
+});
+
+test("Guard client discovers only public keys and validates distinct zero-spend x402 prices", async () => {
+  const keyset = {
+    schema: "goldkey.guard-receipt-keyset.v1",
+    keys: [{ kty: "OKP", crv: "Ed25519", x: "A".repeat(43), kid: "guard-key-1" }],
+  };
+  assert.deepEqual(await run(["guard-keyset"], {
+    env: {},
+    releaseIdentitySource: RELEASE,
+    fetchImpl: async (url, init) => {
+      assert.equal(url, "https://goldkey.example/.well-known/goldkey-guard-keys.json");
+      assert.equal(init.method, "GET");
+      return jsonResponse(keyset);
+    },
+  }), keyset);
+  const rotatedKeyset = {
+    ...keyset,
+    keys: [
+      keyset.keys[0],
+      {
+        ...keyset.keys[0],
+        x: "B".repeat(43),
+        kid: "guard-key-retired",
+        not_before: "2026-08-11T00:00:00.000Z",
+        signing_not_after: "2026-08-11T00:05:00.000Z",
+        revoked_at: "2026-08-11T00:04:00.000Z",
+      },
+    ],
+  };
+  assert.deepEqual(await run(["guard-keyset"], {
+    env: {},
+    releaseIdentitySource: RELEASE,
+    fetchImpl: async () => jsonResponse(rotatedKeyset),
+  }), rotatedKeyset);
+  await assert.rejects(
+    run(["guard-keyset"], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async () => jsonResponse({ ...keyset, keys: [keyset.keys[0], { ...keyset.keys[0], x: "B".repeat(43), kid: "unbounded-retired" }] }),
+    }),
+    /Guard keyset signing interval/,
+  );
+  await assert.rejects(
+    run(["guard-keyset"], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async () => jsonResponse({ ...keyset, keys: [{ ...keyset.keys[0], d: "private" }] }),
+    }),
+    /Guard keyset public Ed25519 key/,
+  );
+  await assert.rejects(
+    run(["guard-keyset"], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async () => jsonResponse({ ...keyset, private_key: "must-not-be-accepted" }),
+    }),
+    /Guard keyset fields/,
+  );
+  await assert.rejects(
+    run(["guard-keyset"], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async () => jsonResponse({ ...keyset, keys: [keyset.keys[0], {
+        ...keyset.keys[0],
+        x: "B".repeat(43),
+        not_before: "2026-08-11T00:00:00.000Z",
+        signing_not_after: "2026-08-11T00:05:00.000Z",
+      }] }),
+    }),
+    /Guard keyset distinct key IDs/,
+  );
+
+  const requestBase = { schema: "goldkey.guard-request.v1", installation_id: "install-1", idempotency_key: "request-0001", issued_at: "2026-08-11T00:00:00.000Z", signature: "A".repeat(86) };
+  for (const [command, path, amount, call] of [
+    ["guard-network-probe", "/v1/guard/paygo/authorize/network", "50000", { kind: "https", connector_id: "crm", operation_id: "create" }],
+    ["guard-evm-probe", "/v1/guard/paygo/authorize/evm", "100000", { kind: "evm_transaction", connector_id: "base", transaction: { chain_id: 8453, from: CONTRACT, to: USDC, value_atomic: "0", data: "0x", nonce: "0", gas_limit: "21000", max_fee_per_gas_atomic: "1000000", max_priority_fee_per_gas_atomic: "100000", type: "eip1559", access_list: [] } }],
+  ]) {
+    const signedRequest = { ...requestBase, call };
+    let request;
+    const result = await run([command, "--request", JSON.stringify(signedRequest)], {
+      env: {},
+      releaseIdentitySource: RELEASE,
+      fetchImpl: async (url, init) => {
+        request = { url, init };
+        return paymentRequiredResponse({ amount }, path);
+      },
+    });
+    assert.equal(request.url, `https://goldkey.example${path}`);
+    assert.equal(request.init.headers["payment-signature"], undefined);
+    assert.deepEqual(JSON.parse(request.init.body), signedRequest);
+    assert.equal(result.http_status, 402);
+    assert.equal(result.payment.amount_atomic, amount);
+    await assert.rejects(
+      run([command, "--request", JSON.stringify(signedRequest)], {
+        env: {},
+        releaseIdentitySource: RELEASE,
+        fetchImpl: async () => paymentRequiredResponse({ amount: "10000" }, path),
+      }),
+      new RegExp(`amount must be ${amount}`),
+    );
+  }
+});
+
+test("Guard probe recognizes an exact unexpired replay without treating it as a new purchase", async () => {
+  const signedRequest = { schema: "goldkey.guard-request.v1", installation_id: "install-1", idempotency_key: "request-0001", issued_at: "2026-08-11T00:00:00.000Z", call: { kind: "https", connector_id: "crm", operation_id: "create" }, signature: "A".repeat(86) };
+  const authorization = { schema: "goldkey.guard-authorization-envelope.v1", receipt: { decision: "BLOCK" } };
+  const result = await run(["guard-network-probe", "--request", JSON.stringify(signedRequest)], {
+    env: {},
+    releaseIdentitySource: RELEASE,
+    fetchImpl: async () => new Response(JSON.stringify(authorization), {
+      status: 200,
+      headers: { "content-type": "application/json", "x-goldkey-idempotent-replay": "true" },
+    }),
+  });
+  assert.deepEqual(result, { http_status: 200, idempotent_replay: true, payment_required: false, authorization_verified: false });
+  assert.equal(JSON.stringify(result).includes("BLOCK"), false);
 });
 
 test("client recognizes direct execution through a symlinked install path", async () => {

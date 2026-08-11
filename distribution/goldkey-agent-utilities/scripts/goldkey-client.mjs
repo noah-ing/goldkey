@@ -9,6 +9,8 @@ const BASE_MAINNET_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const PAYGO_TREASURY = "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b";
 const PAYGO_NETWORK = "eip155:8453";
 const PAYGO_AMOUNT_ATOMIC = "10000";
+const GUARD_NETWORK_AMOUNT_ATOMIC = "50000";
+const GUARD_EVM_AMOUNT_ATOMIC = "100000";
 const PAYGO_MAX_TIMEOUT_SECONDS = 300;
 const MAX_SIGNATURE_CHARS = 32 * 1024;
 
@@ -194,8 +196,39 @@ function validateTransactionTargets(payload, identity) {
 }
 
 export function validateIdentityPayload(kind, payload, identity) {
-  if (!identity) return payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) identityMismatch(`${kind} payload`);
+
+  if (kind === "guard-keyset") {
+    if (Object.keys(payload).length !== 2 || !Object.hasOwn(payload, "schema") || !Object.hasOwn(payload, "keys")) identityMismatch("Guard keyset fields");
+    expectExact(payload.schema, "goldkey.guard-receipt-keyset.v1", "Guard keyset schema");
+    if (!Array.isArray(payload.keys) || payload.keys.length < 1 || payload.keys.length > 32) identityMismatch("Guard keyset keys");
+    const keyIds = new Set();
+    const canonicalDate = (value) => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(Date.parse(value)).toISOString() === value;
+    for (const [index, key] of payload.keys.entries()) {
+      const allowedFields = new Set(["kty", "crv", "x", "kid", "use", "alg", "key_ops", "not_before", "signing_not_after", "revoked_at"]);
+      if (!key || typeof key !== "object" || Array.isArray(key) || Object.keys(key).some((field) => !allowedFields.has(field)) || key.kty !== "OKP" || key.crv !== "Ed25519" || typeof key.x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(key.x) || typeof key.kid !== "string" || key.kid.length < 1 || key.kid.length > 128 || (key.use !== undefined && key.use !== "sig") || (key.alg !== undefined && key.alg !== "EdDSA") || (key.key_ops !== undefined && (!Array.isArray(key.key_ops) || key.key_ops.length !== 1 || key.key_ops[0] !== "verify"))) {
+        identityMismatch("Guard keyset public Ed25519 key");
+      }
+      const hasNotBefore = key.not_before !== undefined;
+      const hasSigningNotAfter = key.signing_not_after !== undefined;
+      if (hasNotBefore !== hasSigningNotAfter || (index > 0 && !hasNotBefore) || (key.revoked_at !== undefined && !hasNotBefore)) {
+        identityMismatch("Guard keyset signing interval");
+      }
+      if (hasNotBefore) {
+        if (!canonicalDate(key.not_before) || !canonicalDate(key.signing_not_after) || Date.parse(key.not_before) >= Date.parse(key.signing_not_after)) {
+          identityMismatch("Guard keyset signing interval");
+        }
+        if (key.revoked_at !== undefined && (!canonicalDate(key.revoked_at) || Date.parse(key.revoked_at) < Date.parse(key.not_before) || Date.parse(key.revoked_at) > Date.parse(key.signing_not_after))) {
+          identityMismatch("Guard keyset revocation interval");
+        }
+      }
+      if (keyIds.has(key.kid)) identityMismatch("Guard keyset distinct key IDs");
+      keyIds.add(key.kid);
+    }
+    return payload;
+  }
+
+  if (!identity) return payload;
 
   if (kind === "offer") {
     expectExact(payload.schema, "goldkey.offer.v1", "offer schema");
@@ -263,7 +296,10 @@ async function request(path, { method = "GET", body, token, headers = {}, valida
   return validateAs ? validateIdentityPayload(validateAs, payload, context.runtime.identity) : payload;
 }
 
-async function paymentProbe(path, requestBody, context, label, fallbackCode) {
+async function paymentProbe(path, requestBody, context, label, fallbackCode, {
+  expectedAmountAtomic = PAYGO_AMOUNT_ATOMIC,
+  allowIdempotentReplay = false,
+} = {}) {
   if (!context.runtime.canonical) fail("Refusing to probe x402 payment against a noncanonical development origin");
   const response = await context.fetchImpl(`${context.runtime.origin}${path}`, {
     method: "POST",
@@ -277,6 +313,9 @@ async function paymentProbe(path, requestBody, context, label, fallbackCode) {
     body = text ? JSON.parse(text) : null;
   } catch {
     body = text || null;
+  }
+  if (allowIdempotentReplay && response.ok && response.headers.get("x-goldkey-idempotent-replay") === "true") {
+    return { http_status: response.status, idempotent_replay: true, payment_required: false, authorization_verified: false };
   }
   if (response.status !== 402) {
     if (response.ok) fail(`${label} executed without an x402 payment challenge; no payment was authorized`);
@@ -302,7 +341,7 @@ async function paymentProbe(path, requestBody, context, label, fallbackCode) {
   if (!option || typeof option !== "object" || Array.isArray(option)) fail("PAYMENT-REQUIRED payment option must be an object");
   if (option.scheme !== "exact") fail("PAYMENT-REQUIRED payment scheme must be exact");
   if (option.network !== PAYGO_NETWORK) fail(`PAYMENT-REQUIRED network must be ${PAYGO_NETWORK}`);
-  if (option.amount !== PAYGO_AMOUNT_ATOMIC) fail(`PAYMENT-REQUIRED amount must be ${PAYGO_AMOUNT_ATOMIC} atomic USDC`);
+  if (option.amount !== expectedAmountAtomic) fail(`PAYMENT-REQUIRED amount must be ${expectedAmountAtomic} atomic USDC`);
   if (normalizeAddress(option.asset, "PAYMENT-REQUIRED asset") !== context.runtime.identity.usdc) fail("PAYMENT-REQUIRED asset must be canonical Base USDC");
   if (normalizeAddress(option.payTo, "PAYMENT-REQUIRED payee") !== PAYGO_TREASURY.toLowerCase()) fail("PAYMENT-REQUIRED payee does not match the GoldKey treasury");
   if (!Number.isInteger(option.maxTimeoutSeconds) || option.maxTimeoutSeconds < 1 || option.maxTimeoutSeconds > PAYGO_MAX_TIMEOUT_SECONDS) {
@@ -382,6 +421,9 @@ Commands:
   keys-revoke-all
   action-gate-probe --input JSON_OBJECT
   paygo-probe --name TOOL --input JSON_OBJECT
+  guard-keyset
+  guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON
+  guard-evm-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON
   self-test
 
 The published release embeds and validates its canonical Base mainnet origin and identity.
@@ -417,6 +459,7 @@ export async function run(argv, options = {}) {
   if (command === "catalog") return request("/v1/catalog", {}, context);
   if (command === "demo") return request("/v1/demo", {}, context);
   if (command === "openapi") return request("/openapi.json", {}, context);
+  if (command === "guard-keyset") return request("/.well-known/goldkey-guard-keys.json", { validateAs: "guard-keyset" }, context);
   if (command === "quote") {
     return request("/v1/commerce/respond", { method: "POST", body: quoteBody(flags), validateAs: "commerce" }, context);
   }
@@ -476,6 +519,26 @@ export async function run(argv, options = {}) {
       context,
       "Paygo",
       "paygo_probe_failed",
+    );
+  }
+  if (command === "guard-network-probe") {
+    return paymentProbe(
+      "/v1/guard/paygo/authorize/network",
+      jsonFlag(flags, "request"),
+      context,
+      "Guard network authorization",
+      "guard_network_probe_failed",
+      { expectedAmountAtomic: GUARD_NETWORK_AMOUNT_ATOMIC, allowIdempotentReplay: true },
+    );
+  }
+  if (command === "guard-evm-probe") {
+    return paymentProbe(
+      "/v1/guard/paygo/authorize/evm",
+      jsonFlag(flags, "request"),
+      context,
+      "Guard EVM authorization",
+      "guard_evm_probe_failed",
+      { expectedAmountAtomic: GUARD_EVM_AMOUNT_ATOMIC, allowIdempotentReplay: true },
     );
   }
   fail(`Unknown command: ${command}`);

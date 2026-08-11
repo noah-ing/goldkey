@@ -5,6 +5,7 @@ import { createAuthService } from "./auth.mjs";
 import { createChainService } from "./chain.mjs";
 import { loadConfig } from "./config.mjs";
 import { createGoldKeyDatabase } from "./database.mjs";
+import { createGuardService } from "./guard-service.mjs";
 import { validateX402Facilitator } from "./x402.mjs";
 
 const config = loadConfig();
@@ -15,7 +16,8 @@ const deployment = await chain.validateDeployment({ expectedTermsHash });
 const x402 = await validateX402Facilitator(config);
 const db = await createGoldKeyDatabase(config);
 const auth = createAuthService({ config, db, chain });
-const app = createApp({ config, db, chain, auth });
+const guard = config.guardEnabled ? createGuardService({ config, db, chain, previousPublicKeys: config.guardReceiptPreviousPublicKeys }) : undefined;
+const app = createApp({ config, db, chain, auth, guard });
 
 const server = app.listen(config.port, () => {
   console.log(JSON.stringify({
@@ -31,6 +33,9 @@ const server = app.listen(config.port, () => {
     x402_network: x402.network,
     x402_scheme: x402.scheme,
     x402_version: x402.x402Version,
+    guard_enabled: config.guardEnabled,
+    guard_network_price_usdc: config.guardEnabled ? config.guardNetworkPriceUsd : undefined,
+    guard_evm_price_usdc: config.guardEnabled ? config.guardEvmPriceUsd : undefined,
   }));
 });
 

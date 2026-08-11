@@ -12,6 +12,7 @@ RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 COPY src ./src
 COPY agent ./agent
 COPY TERMS.md ./TERMS.md
+COPY GUARD_TERMS.md ./GUARD_TERMS.md
 
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node

@@ -29,6 +29,14 @@ function explicit(overrides, overrideName, environmentName) {
   return Object.hasOwn(overrides, overrideName) || Boolean(process.env[environmentName]);
 }
 
+function optionalText(name, value, { maxLength = 256 } = {}) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value !== "string" || value.length > maxLength || /[\r\n]/.test(value)) {
+    throw new Error(`${name} must be a single-line string of at most ${maxLength} characters`);
+  }
+  return value;
+}
+
 function parsedHttpUrl(name, value, { requireHttps = false } = {}) {
   let parsed;
   try {
@@ -79,11 +87,47 @@ function authHeaders() {
   return headers;
 }
 
+function guardPreviousPublicKeys(override) {
+  const raw = override ?? process.env.GUARD_RECEIPT_PREVIOUS_PUBLIC_KEYS_JSON ?? "";
+  if (raw === "") return Object.freeze([]);
+  let keys = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 32_768) throw new Error("GUARD_RECEIPT_PREVIOUS_PUBLIC_KEYS_JSON is too large");
+    try {
+      keys = JSON.parse(raw);
+    } catch {
+      throw new Error("GUARD_RECEIPT_PREVIOUS_PUBLIC_KEYS_JSON must be valid JSON");
+    }
+  }
+  if (!Array.isArray(keys) || keys.length > 31) {
+    throw new Error("GUARD_RECEIPT_PREVIOUS_PUBLIC_KEYS_JSON must contain at most 31 public keys");
+  }
+  for (const key of keys) {
+    if (!key || typeof key !== "object" || Array.isArray(key) || Object.hasOwn(key, "d")) {
+      throw new Error("GUARD_RECEIPT_PREVIOUS_PUBLIC_KEYS_JSON must contain public-only JWKs");
+    }
+  }
+  return Object.freeze(keys.map((key) => Object.freeze({ ...key })));
+}
+
+function parsedGuardAllowedOperatorWallets(override) {
+  const values = Array.isArray(override)
+    ? override
+    : String(override ?? process.env.GUARD_ALLOWED_OPERATOR_WALLETS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  if (values.length > 100) throw new Error("GUARD_ALLOWED_OPERATOR_WALLETS must contain at most 100 addresses");
+  const normalized = values.map((value) => address("GUARD_ALLOWED_OPERATOR_WALLETS", value).toLowerCase());
+  if (new Set(normalized).size !== normalized.length) throw new Error("GUARD_ALLOWED_OPERATOR_WALLETS must not contain duplicates");
+  return Object.freeze(normalized);
+}
+
 export function loadConfig(overrides = {}) {
   const nodeEnv = overrides.nodeEnv ?? process.env.NODE_ENV ?? "development";
   const x402Enabled = overrides.x402Enabled ?? boolean("X402_ENABLED", false);
+  const guardEnabled = overrides.guardEnabled ?? boolean("GUARD_ENABLED", false);
+  const guardAllowedOperatorWallets = parsedGuardAllowedOperatorWallets(overrides.guardAllowedOperatorWallets);
   const devAuthBypass = overrides.devAuthBypass ?? boolean("DEV_AUTH_BYPASS", false);
   if (nodeEnv === "production" && devAuthBypass) throw new Error("DEV_AUTH_BYPASS cannot be enabled in production");
+  if (guardEnabled && !x402Enabled) throw new Error("GUARD_ENABLED requires X402_ENABLED because Guard authorizations are premium paygo services");
 
   if (nodeEnv === "production") {
     const required = [
@@ -104,7 +148,16 @@ export function loadConfig(overrides = {}) {
     if (!explicit(overrides, "databaseUrl", "DATABASE_URL") && !explicit(overrides, "databasePath", "DATABASE_PATH")) {
       throw new Error("DATABASE_URL or DATABASE_PATH must be explicitly configured in production");
     }
+    if (guardEnabled) {
+      if (!explicit(overrides, "guardReceiptKeyId", "GUARD_RECEIPT_KEY_ID")) {
+        throw new Error("GUARD_RECEIPT_KEY_ID must be explicitly configured in production when Guard is enabled");
+      }
+      if (!explicit(overrides, "guardReceiptPrivateKey", "GUARD_RECEIPT_PRIVATE_KEY")) {
+        throw new Error("GUARD_RECEIPT_PRIVATE_KEY must be explicitly configured in production when Guard is enabled");
+      }
+    }
   }
+  if (guardEnabled && guardAllowedOperatorWallets.length === 0) throw new Error("GUARD_ENABLED requires at least one GUARD_ALLOWED_OPERATOR_WALLETS design-partner address");
 
   const publicOrigin = overrides.publicOrigin ?? process.env.PUBLIC_ORIGIN ?? process.env.RENDER_EXTERNAL_URL ?? "http://localhost:8402";
   const parsedOrigin = parsedHttpUrl("PUBLIC_ORIGIN", publicOrigin, { requireHttps: nodeEnv === "production" });
@@ -148,6 +201,20 @@ export function loadConfig(overrides = {}) {
   }
   const devAuthToken = overrides.devAuthToken ?? process.env.DEV_AUTH_TOKEN ?? "";
   if (devAuthBypass && devAuthToken.length < 20) throw new Error("DEV_AUTH_TOKEN must be at least 20 characters when bypass is enabled");
+  const guardReceiptKeyId = optionalText(
+    "GUARD_RECEIPT_KEY_ID",
+    overrides.guardReceiptKeyId ?? process.env.GUARD_RECEIPT_KEY_ID,
+    { maxLength: 80 },
+  );
+  const guardReceiptPrivateKey = optionalText(
+    "GUARD_RECEIPT_PRIVATE_KEY",
+    overrides.guardReceiptPrivateKey ?? process.env.GUARD_RECEIPT_PRIVATE_KEY,
+    { maxLength: 16_384 },
+  );
+  if (Boolean(guardReceiptKeyId) !== Boolean(guardReceiptPrivateKey)) {
+    throw new Error("GUARD_RECEIPT_KEY_ID and GUARD_RECEIPT_PRIVATE_KEY must be set together");
+  }
+  const guardReceiptPreviousPublicKeys = guardPreviousPublicKeys(overrides.guardReceiptPreviousPublicKeys);
 
   return Object.freeze({
     nodeEnv,
@@ -162,6 +229,14 @@ export function loadConfig(overrides = {}) {
     usdcAddress,
     treasuryAddress,
     x402Enabled,
+    guardEnabled,
+    guardReceiptKeyId,
+    guardReceiptPrivateKey,
+    guardReceiptPreviousPublicKeys,
+    guardAllowedOperatorWallets,
+    guardAuthorizationTtlMs: 60_000,
+    guardNetworkPriceUsd: "0.05",
+    guardEvmPriceUsd: "0.10",
     x402FacilitatorUrl: parsedFacilitator.toString().replace(/\/+$/, ""),
     x402AuthHeaders,
     cdpApiKeyId,

@@ -65,7 +65,7 @@ test("domain skill index pins a deterministic archive with only audited files", 
     skills: [{
       name: "goldkey-agent-utilities",
       type: "archive",
-      description: "Run GoldKey Action Gate before proposed agent actions to obtain ALLOW, REVIEW, or BLOCK with a deterministic, reproducible receipt hash, or use its component JSON, prompt, URL, spend, and Unicode checks. Use when an OpenClaw or comparable agent needs an exact 0.01-USDC pre-action decision, zero-spend x402 probe, pass-versus-paygo evaluation, or GoldKey pass, renewal, authentication, quota, and scoped child-key operations.",
+      description: "Run GoldKey Action Gate before proposed agent actions to obtain ALLOW, REVIEW, or BLOCK with a deterministic, reproducible receipt hash, or use its component JSON, prompt, URL, spend, and Unicode checks. When live discovery explicitly advertises it, integrate the feature-gated GoldKey Guard beta as a paid hosted authorizer plus operator-controlled local enforcer for real MCP, HTTPS, or supported EVM calls. Use for exact 0.01-USDC pre-action decisions, zero-spend x402 probes, pass-versus-paygo evaluation, Guard enforcement, or GoldKey pass, renewal, authentication, quota, and scoped child-key operations.",
       url: "./goldkey-agent-utilities.tar.gz",
       digest: `sha256:${sha256(firstArchive)}`,
     }],

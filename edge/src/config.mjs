@@ -57,6 +57,10 @@ export function originUrl(env) {
   return httpsUrl(env.ORIGIN_API, "ORIGIN_API", { originOnly: true });
 }
 
+export function isGuardEnabled(env) {
+  return env.GUARD_ENABLED === "true";
+}
+
 export function isCommerceConfigured(request, env) {
   try {
     commerceConfig(request, env);

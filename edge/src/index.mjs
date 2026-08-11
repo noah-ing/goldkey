@@ -1,7 +1,7 @@
-import { catalog } from "./catalog.mjs";
+import { catalog, guardCatalog } from "./catalog.mjs";
 import { createChainClient } from "./chain.mjs";
 import { calculateQuote, calculateRenewalQuote, renderCommerceResponse } from "./commerce.mjs";
-import { commerceConfig, isCommerceConfigured, originUrl, publicOrigin } from "./config.mjs";
+import { commerceConfig, isCommerceConfigured, isGuardEnabled, originUrl, publicOrigin } from "./config.mjs";
 import { EdgeError, assert } from "./errors.mjs";
 import { buildMetadata } from "./metadata.mjs";
 import { buildOffer } from "./offer.mjs";
@@ -11,9 +11,11 @@ const VERSION = "1.0.0";
 const MAX_JSON_BYTES = 64 * 1024;
 const MAX_PROXY_BYTES = 1024 * 1024;
 const SUPPLY_CACHE_MS = 5_000;
-const DOMAIN_SKILL_ASSETS = new Map([
+const DISTRIBUTION_ASSETS = new Map([
   ["/.well-known/agent-skills/index.json", "application/json; charset=utf-8"],
   ["/.well-known/agent-skills/goldkey-agent-utilities.tar.gz", "application/gzip"],
+  ["/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz", "application/gzip"],
+  ["/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json", "application/json; charset=utf-8"],
 ]);
 
 function json(value, status = 200, headers = {}) {
@@ -26,7 +28,7 @@ function json(value, status = 200, headers = {}) {
 function withPublicHeaders(response, requestId) {
   const headers = new Headers(response.headers);
   headers.set("access-control-allow-origin", "*");
-  headers.set("access-control-expose-headers", "payment-required,payment-response,x-request-id");
+  headers.set("access-control-expose-headers", "payment-required,payment-response,x-goldkey-idempotent-replay,x-request-id");
   headers.set("referrer-policy", "no-referrer");
   headers.set("x-content-type-options", "nosniff");
   headers.set("x-request-id", requestId);
@@ -48,7 +50,7 @@ async function parseJson(request, limit = MAX_JSON_BYTES) {
   }
 }
 
-function proxyRoute(pathname, method) {
+function proxyRoute(pathname, method, guardEnabled = false) {
   const allowed = new Map([
     ["/v1/auth/challenge", ["POST"]],
     ["/v1/auth/verify", ["POST"]],
@@ -57,14 +59,35 @@ function proxyRoute(pathname, method) {
     ["/v1/paygo/execute", ["POST"]],
     ["/v1/action-gate", ["POST"]],
   ]);
+  if (guardEnabled) {
+    allowed.set("/guard/terms", ["GET"]);
+    allowed.set("/.well-known/goldkey-guard-keys.json", ["GET"]);
+    allowed.set("/v1/guard/policies", ["POST"]);
+    allowed.set("/v1/guard/installations", ["POST"]);
+    allowed.set("/v1/guard/revocations", ["POST"]);
+    allowed.set("/v1/guard/paygo/authorize/network", ["POST"]);
+    allowed.set("/v1/guard/paygo/authorize/evm", ["POST"]);
+  }
   const exact = allowed.get(pathname);
-  if (exact) return { known: true, allowed: exact.includes(method) };
-  if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return { known: true, allowed: method === "DELETE" };
-  if (/^\/v1\/tools\/[^/]+$/.test(pathname)) return { known: true, allowed: method === "POST" };
-  return { known: false, allowed: false };
+  if (exact) return { known: true, allowed: exact.includes(method), methods: exact };
+  if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return { known: true, allowed: method === "DELETE", methods: ["DELETE"] };
+  if (/^\/v1\/tools\/[^/]+$/.test(pathname)) return { known: true, allowed: method === "POST", methods: ["POST"] };
+  if (guardEnabled && /^\/v1\/guard\/executions\/[A-Za-z0-9._:-]{1,128}\/(?:commit|reconcile-commit|complete)$/.test(pathname)) {
+    return { known: true, allowed: method === "POST", methods: ["POST"] };
+  }
+  return { known: false, allowed: false, methods: [] };
 }
 
-async function proxyToOrigin(request, env, fetchImpl) {
+function isGuardPath(pathname) {
+  return pathname === "/guard"
+    || pathname.startsWith("/guard/")
+    || pathname === "/.well-known/goldkey-guard-keys.json"
+    || pathname.startsWith("/.well-known/goldkey-guard-keys.json/")
+    || pathname === "/v1/guard"
+    || pathname.startsWith("/v1/guard/");
+}
+
+async function proxyToOrigin(request, env, fetchImpl, { guard = false } = {}) {
   const base = originUrl(env);
   const source = new URL(request.url);
   const target = new URL(base);
@@ -73,7 +96,10 @@ async function proxyToOrigin(request, env, fetchImpl) {
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   assert(Number.isFinite(contentLength) && contentLength <= MAX_PROXY_BYTES, 413, "request_too_large", `Proxied request body must not exceed ${MAX_PROXY_BYTES} bytes`);
-  const headers = new Headers(request.headers);
+  const headers = guard
+    ? new Headers([...new Set(["accept", "content-type", "payment-signature", "x-payment"])]
+      .flatMap((name) => request.headers.has(name) ? [[name, request.headers.get(name)]] : []))
+    : new Headers(request.headers);
   headers.delete("host");
   headers.delete("content-length");
   headers.set("x-forwarded-host", source.host);
@@ -150,8 +176,23 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
     const url = new URL(request.url);
     const method = request.method.toUpperCase();
     const pathname = url.pathname;
+    const guardEnabled = isGuardEnabled(env);
 
     if (method === "OPTIONS") {
+      if (isGuardPath(pathname)) {
+        const guardProxy = proxyRoute(pathname, method, guardEnabled);
+        if (!guardEnabled || !guardProxy.known) {
+          return json({ error: { code: "not_found", message: "Route not found" } }, 404, { "cache-control": "no-store" });
+        }
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "access-control-allow-methods": `${guardProxy.methods.join(",")},OPTIONS`,
+            "access-control-allow-headers": "content-type,payment-signature,x-payment",
+            "access-control-max-age": "86400",
+          },
+        });
+      }
       return new Response(null, {
         status: 204,
         headers: {
@@ -173,9 +214,9 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
       }, 200, { "cache-control": "no-store" });
     }
 
-    const domainSkillContentType = DOMAIN_SKILL_ASSETS.get(pathname);
-    if (domainSkillContentType && method === "GET") {
-      return asset(env, request, pathname, domainSkillContentType);
+    const distributionContentType = DISTRIBUTION_ASSETS.get(pathname);
+    if (distributionContentType && method === "GET") {
+      return asset(env, request, pathname, distributionContentType);
     }
 
     if (pathname === "/terms" && method === "GET") return asset(env, request, "/TERMS.md", "text/markdown; charset=utf-8");
@@ -186,7 +227,7 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
 
     const origin = publicOrigin(request, env);
     if (pathname === "/openapi.json" && method === "GET") {
-      return json(buildOpenApi({ publicOrigin: origin }), 200, { "cache-control": "public, max-age=300" });
+      return json(buildOpenApi({ publicOrigin: origin, guardEnabled }), 200, { "cache-control": "public, max-age=300" });
     }
     if (pathname === "/.well-known/agent.json" && method === "GET") {
       return json({
@@ -200,6 +241,7 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
         decision_rule: "Buy only when risk-adjusted expected paygo cost exceeds pass cost.",
         commerce_configured: isCommerceConfigured(request, env),
         fulfillment: { topology: "stateful_origin", may_cold_start: true },
+        ...(guardEnabled ? { guard: guardCatalog(origin) } : {}),
       }, 200, { "cache-control": "public, max-age=300" });
     }
     if (pathname === "/v1/catalog" && method === "GET") {
@@ -207,6 +249,7 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
         tools: catalog(),
         pricing: { paygo_per_call_usdc: "0.01", pass_price_usdc: "50.00", calls_per_pass: 10_000, pass_term_days: 365 },
         fulfillment: { topology: "stateful_origin", may_cold_start: true },
+        ...(guardEnabled ? { guard: guardCatalog(origin) } : {}),
       }, 200, { "cache-control": "public, max-age=300" });
     }
 
@@ -252,11 +295,11 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
       return json(metadata, 200, { "cache-control": "public, max-age=60" });
     }
 
-    const proxy = proxyRoute(pathname, method);
+    const proxy = proxyRoute(pathname, method, guardEnabled);
     if (proxy.known && !proxy.allowed) {
-      return json({ error: { code: "method_not_allowed", message: "Method not allowed" } }, 405, { allow: pathname.includes("/keys/") ? "DELETE" : "GET, POST, DELETE" });
+      return json({ error: { code: "method_not_allowed", message: "Method not allowed" } }, 405, { allow: proxy.methods.join(", ") });
     }
-    if (proxy.allowed) return proxyToOrigin(request, env, fetchImpl);
+    if (proxy.allowed) return proxyToOrigin(request, env, fetchImpl, { guard: isGuardPath(pathname) });
 
     return json({ error: { code: "not_found", message: "Route not found" } }, 404, { "cache-control": "no-store" });
   }

@@ -111,6 +111,8 @@ function makeNetwork(options = {}) {
         query: target.search,
         method: init.method,
         authorization: init.headers.get("authorization"),
+        cookie: init.headers.get("cookie"),
+        api_key: init.headers.get("x-api-key"),
         idempotency_key: init.headers.get("idempotency-key"),
         payment_signature: init.headers.get("payment-signature"),
         body,
@@ -196,6 +198,61 @@ test("domain skill discovery serves only the exact index and integrity-pinned ar
   assert.deepEqual(assetRequests, [
     "/.well-known/agent-skills/index.json",
     "/.well-known/agent-skills/goldkey-agent-utilities.tar.gz",
+  ]);
+});
+
+test("Guard enforcer distribution serves one integrity-pinned installable package", async () => {
+  const publicRoot = `${EDGE_ROOT}/public/.well-known/goldkey-guard`;
+  const artifactName = "goldkey-enforcer-0.1.0.tgz";
+  const artifactAsset = readFileSync(`${publicRoot}/${artifactName}`);
+  const manifestAsset = readFileSync(`${publicRoot}/${artifactName}.integrity.json`);
+  assert.deepEqual(artifactAsset, readFileSync(`${PACKAGE_ROOT}/enforcer/dist/${artifactName}`));
+  assert.deepEqual(manifestAsset, readFileSync(`${PACKAGE_ROOT}/enforcer/dist/${artifactName}.integrity.json`));
+  const manifest = JSON.parse(manifestAsset);
+  assert.equal(manifest.schema, "goldkey-enforcer-package-integrity.v1");
+  assert.equal(manifest.package, "@goldkey/enforcer");
+  assert.equal(manifest.version, "0.1.0");
+  assert.equal(manifest.filename, artifactName);
+  assert.equal(manifest.size, artifactAsset.byteLength);
+  assert.equal(manifest.sha256, createHash("sha256").update(artifactAsset).digest("hex"));
+  assert.equal(manifest.integrity, `sha512-${createHash("sha512").update(artifactAsset).digest("base64")}`);
+  assert.equal(manifest.download_url, `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/${artifactName}`);
+
+  const requested = [];
+  const distributionAssets = {
+    async fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      requested.push(pathname);
+      if (pathname === `/.well-known/goldkey-guard/${artifactName}`) return new Response(artifactAsset);
+      if (pathname === `/.well-known/goldkey-guard/${artifactName}.integrity.json`) return new Response(manifestAsset);
+      return new Response("not found", { status: 404 });
+    },
+  };
+  const worker = createWorker();
+  const artifactResponse = await worker.fetch(
+    new Request(`https://edge.example/.well-known/goldkey-guard/${artifactName}`),
+    env({ ASSETS: distributionAssets }),
+  );
+  assert.equal(artifactResponse.status, 200);
+  assert.equal(artifactResponse.headers.get("content-type"), "application/gzip");
+  assert.deepEqual(Buffer.from(await artifactResponse.arrayBuffer()), artifactAsset);
+
+  const manifestResponse = await worker.fetch(
+    new Request(`https://edge.example/.well-known/goldkey-guard/${artifactName}.integrity.json`),
+    env({ ASSETS: distributionAssets }),
+  );
+  assert.equal(manifestResponse.status, 200);
+  assert.match(manifestResponse.headers.get("content-type"), /^application\/json/);
+  assert.deepEqual(Buffer.from(await manifestResponse.arrayBuffer()), manifestAsset);
+
+  const nearMiss = await worker.fetch(
+    new Request("https://edge.example/.well-known/goldkey-guard/latest.tgz"),
+    env({ ASSETS: distributionAssets }),
+  );
+  assert.equal(nearMiss.status, 404);
+  assert.deepEqual(requested, [
+    `/.well-known/goldkey-guard/${artifactName}`,
+    `/.well-known/goldkey-guard/${artifactName}.integrity.json`,
   ]);
 });
 
@@ -483,6 +540,166 @@ test("only the exact stateful allowlist is proxied and important headers survive
   const wrongGateMethod = await worker.fetch(new Request("https://edge.example/v1/action-gate"), env());
   assert.equal(wrongGateMethod.status, 405);
   assert.equal(network.requests.length, before);
+});
+
+test("Guard discovery and proxy routes fail closed unless GUARD_ENABLED is exactly true", async () => {
+  for (const flag of [undefined, "false", "TRUE", "1", true]) {
+    const network = makeNetwork();
+    const worker = createWorker({ fetchImpl: network.fetchImpl });
+    const configured = env({ GUARD_ENABLED: flag });
+    const openapi = await body(await worker.fetch(new Request("https://edge.example/openapi.json"), configured));
+    const postedCatalog = await body(await worker.fetch(new Request("https://edge.example/v1/catalog"), configured));
+    const agent = await body(await worker.fetch(new Request("https://edge.example/.well-known/agent.json"), configured));
+    assert.equal(openapi.paths["/guard/terms"], undefined);
+    assert.equal(openapi.paths["/.well-known/goldkey-guard-keys.json"], undefined);
+    assert.equal(openapi.paths["/v1/guard/revocations"], undefined);
+    assert.equal(openapi.paths["/v1/guard/paygo/authorize/network"], undefined);
+    assert.equal(postedCatalog.guard, undefined);
+    assert.equal(agent.guard, undefined);
+
+    for (const [path, method] of [
+      ["/guard/terms", "GET"],
+      ["/.well-known/goldkey-guard-keys.json", "GET"],
+      ["/v1/guard/policies", "POST"],
+      ["/v1/guard/revocations", "POST"],
+      ["/v1/guard/paygo/authorize/network", "POST"],
+    ]) {
+      const response = await worker.fetch(new Request(`https://edge.example${path}`, { method }), configured);
+      assert.equal(response.status, 404, `${String(flag)} ${path}`);
+      const preflight = await worker.fetch(new Request(`https://edge.example${path}`, { method: "OPTIONS" }), configured);
+      assert.equal(preflight.status, 404, `${String(flag)} OPTIONS ${path}`);
+    }
+    for (const path of ["/guard/terms/", "/.well-known/goldkey-guard-keys.json/", "/v1/guard"]) {
+      const preflight = await worker.fetch(new Request(`https://edge.example${path}`, { method: "OPTIONS" }), configured);
+      assert.equal(preflight.status, 404, `${String(flag)} OPTIONS ${path}`);
+    }
+    assert.equal(network.requests.length, 0);
+  }
+});
+
+test("enabled Guard discovery is beta-only and proxies only the exact control-plane routes", async () => {
+  const network = makeNetwork();
+  const worker = createWorker({ fetchImpl: network.fetchImpl });
+  const configured = env({ GUARD_ENABLED: "true" });
+  const openapi = await body(await worker.fetch(new Request("https://edge.example/openapi.json"), configured));
+  const postedCatalog = await body(await worker.fetch(new Request("https://edge.example/v1/catalog"), configured));
+  const agent = await body(await worker.fetch(new Request("https://edge.example/.well-known/agent.json"), configured));
+
+  assert.equal(postedCatalog.guard.status, "beta");
+  assert.equal(postedCatalog.guard.availability, "feature_gated");
+  assert.equal(postedCatalog.guard.pass_included, false);
+  assert.equal(postedCatalog.guard.pricing.mcp_or_https_authorization_usdc, "0.05");
+  assert.equal(postedCatalog.guard.pricing.evm_authorization_usdc, "0.10");
+  assert.equal(postedCatalog.guard.routes.terms, "https://edge.example/guard/terms");
+  assert.equal(postedCatalog.guard.routes.revocation, "https://edge.example/v1/guard/revocations");
+  assert.equal(postedCatalog.guard.routes.reconcile_commit_template, "https://edge.example/v1/guard/executions/{executionId}/reconcile-commit");
+  assert.equal(postedCatalog.guard.distribution.artifact, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz");
+  assert.equal(postedCatalog.guard.distribution.integrity_manifest, "https://edge.example/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json");
+  assert.equal(postedCatalog.guard.distribution.size_bytes, 44676);
+  assert.equal(postedCatalog.guard.distribution.sha256, "abf718097a3e3c4125e31825f6d430bcd210a3d192b20176f8b94286ac3195aa");
+  assert.match(postedCatalog.guard.topology.hosted_authorizer, /never receives upstream credentials/i);
+  assert.match(postedCatalog.guard.topology.local_enforcer, /operator-controlled execution-path/i);
+  assert.equal(agent.guard.status, "beta");
+
+  const exactPaths = [
+    "/guard/terms",
+    "/.well-known/goldkey-guard-keys.json",
+    "/v1/guard/policies",
+    "/v1/guard/installations",
+    "/v1/guard/revocations",
+    "/v1/guard/paygo/authorize/network",
+    "/v1/guard/paygo/authorize/evm",
+    "/v1/guard/executions/{executionId}/commit",
+    "/v1/guard/executions/{executionId}/reconcile-commit",
+    "/v1/guard/executions/{executionId}/complete",
+  ];
+  for (const path of exactPaths) assert.ok(openapi.paths[path], path);
+  assert.equal(openapi.paths["/v1/guard/authorize/pass"], undefined);
+  assert.equal(openapi.paths["/v1/guard/executions/{executionId}"]?.get, undefined);
+  assert.equal(openapi.paths["/v1/guard/paygo/authorize/network"].post["x-payment-info"].price.amount, "0.05");
+  assert.equal(openapi.paths["/v1/guard/paygo/authorize/evm"].post["x-payment-info"].price.amount, "0.10");
+  const edgeEvmTransaction = openapi.components.schemas.GuardEvmRequest.properties.call.oneOf[0].properties.transaction;
+  assert.deepEqual(edgeEvmTransaction.required, [
+    "chain_id", "from", "value_atomic", "data", "nonce", "gas_limit",
+    "max_fee_per_gas_atomic", "max_priority_fee_per_gas_atomic",
+  ]);
+  assert.equal(edgeEvmTransaction.properties.type.const, "eip1559");
+  assert.equal(edgeEvmTransaction.properties.access_list.maxItems, 0);
+  const installationPattern = "^gki_[A-Za-z0-9_-]{43}$";
+  assert.equal(openapi.components.schemas.GuardInstallation.properties.installation_id.pattern, installationPattern);
+  assert.equal(openapi.components.schemas.GuardNetworkRequest.properties.installation_id.pattern, installationPattern);
+  assert.equal(openapi.components.schemas.GuardEvmRequest.properties.installation_id.pattern, installationPattern);
+  assert.equal(openapi.components.schemas.GuardCommit.properties.installation_id.pattern, installationPattern);
+  assert.equal(openapi.components.schemas.GuardReconciledCommit.properties.commit.$ref, "#/components/schemas/GuardCommit");
+  assert.equal(openapi.components.schemas.GuardReconciledCommit.properties.payment_proof.properties.payment_payload.properties.accepted.properties.network.const, "eip155:8453");
+  assert.equal(openapi.components.schemas.GuardCompletion.properties.installation_id.pattern, installationPattern);
+  assert.ok(openapi.components.schemas.GuardInstallation.required.includes("key_proof"));
+  const policyConnectors = openapi.components.schemas.GuardPolicy.properties.connectors.items.oneOf;
+  assert.equal(policyConnectors[0].properties.tools.items.properties.arguments_schema.type, "object");
+  assert.equal(policyConnectors[1].properties.operations.items.properties.query_schema.type, "object");
+  assert.equal(policyConnectors[1].properties.operations.items.properties.body_schema.type, "object");
+  assert.equal(openapi.paths["/v1/guard/revocations"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/GuardRevocation");
+  assert.deepEqual(openapi.components.schemas.GuardRevocation.required, ["schema", "target_kind", "target_id", "operator_wallet", "audience", "issued_at", "signature"]);
+  assert.match(openapi.info.description, /feature-gated GoldKey Guard beta/);
+  assert.match(openapi.info.description, /hosted authorizer never forwards calls/);
+
+  const proxyCases = [
+    ["/guard/terms", "GET"],
+    ["/.well-known/goldkey-guard-keys.json", "GET"],
+    ["/v1/guard/policies", "POST"],
+    ["/v1/guard/installations", "POST"],
+    ["/v1/guard/revocations", "POST"],
+    ["/v1/guard/paygo/authorize/network", "POST"],
+    ["/v1/guard/paygo/authorize/evm", "POST"],
+    ["/v1/guard/executions/receipt-1/commit", "POST"],
+    ["/v1/guard/executions/receipt-1/reconcile-commit", "POST"],
+    ["/v1/guard/executions/receipt-1/complete", "POST"],
+  ];
+  for (const [path, method] of proxyCases) {
+    const response = await worker.fetch(new Request(`https://edge.example${path}`, {
+      method,
+      headers: method === "POST" ? { authorization: "Bearer must-not-forward", cookie: "secret=session", "x-api-key": "must-not-forward", "content-type": "application/json", "payment-signature": "signed-guard-payment" } : undefined,
+      body: method === "POST" ? JSON.stringify({ route: path }) : undefined,
+    }), configured);
+    assert.equal(response.status, 200, path);
+    const echo = await body(response);
+    assert.equal(echo.path, path);
+    assert.equal(echo.method, method);
+    if (method === "POST") assert.equal(echo.payment_signature, "signed-guard-payment");
+    assert.equal(echo.authorization, null);
+    assert.equal(echo.cookie, null);
+    assert.equal(echo.api_key, null);
+    assert.match(response.headers.get("access-control-expose-headers"), /x-goldkey-idempotent-replay/);
+  }
+
+  for (const path of proxyCases.map(([value]) => value)) {
+    const preflight = await worker.fetch(new Request(`https://edge.example${path}`, { method: "OPTIONS" }), configured);
+    assert.equal(preflight.status, 204, `OPTIONS ${path}`);
+  }
+
+  const before = network.requests.length;
+  const lookup = await worker.fetch(new Request("https://edge.example/v1/guard/executions/receipt-1"), configured);
+  assert.equal(lookup.status, 404);
+  const wildcard = await worker.fetch(new Request("https://edge.example/v1/guard/anything", { method: "POST" }), configured);
+  assert.equal(wildcard.status, 404);
+  const wildcardPreflight = await worker.fetch(new Request("https://edge.example/v1/guard/anything", { method: "OPTIONS" }), configured);
+  assert.equal(wildcardPreflight.status, 404);
+  for (const path of ["/guard/terms/", "/.well-known/goldkey-guard-keys.json/", "/v1/guard"]) {
+    const nearMissPreflight = await worker.fetch(new Request(`https://edge.example${path}`, { method: "OPTIONS" }), configured);
+    assert.equal(nearMissPreflight.status, 404, `OPTIONS ${path}`);
+  }
+  const invalidExecution = await worker.fetch(new Request("https://edge.example/v1/guard/executions/%2F/commit", { method: "POST" }), configured);
+  assert.equal(invalidExecution.status, 404);
+  const wrongMethod = await worker.fetch(new Request("https://edge.example/v1/guard/policies"), configured);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "POST");
+  assert.equal(network.requests.length, before);
+});
+
+test("Wrangler configurations keep Guard discovery disabled until an intentional flag change", () => {
+  const wrangler = readFileSync(`${EDGE_ROOT}/wrangler.toml`, "utf8");
+  assert.equal((wrangler.match(/^GUARD_ENABLED = "false"$/gm) ?? []).length, 2);
+  assert.doesNotMatch(wrangler, /^GUARD_ENABLED = "true"$/m);
 });
 
 test("missing or unavailable origin fails safely without affecting storefront", async () => {

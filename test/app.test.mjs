@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import test from "node:test";
 import { getAddress } from "viem";
-import { createApp } from "../src/app.mjs";
+import { createApp, createGuardBeforeSettlementRecheck } from "../src/app.mjs";
 import { createAuthService } from "../src/auth.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { GoldKeyDatabase } from "../src/database.mjs";
+import { ServiceError } from "../src/errors.mjs";
+import { createGuardBeforeSettlementHook } from "../src/x402.mjs";
 
 const OWNER = getAddress("0x000000000000000000000000000000000000dEaD");
 const PUBLIC_ORIGIN = "http://127.0.0.1:8402";
@@ -22,6 +24,8 @@ async function fixture(t, overrides = {}) {
     usdcAddress: "0x0000000000000000000000000000000000000002",
     treasuryAddress: "0x0000000000000000000000000000000000000003",
     x402Enabled: overrides.x402Enabled ?? false,
+    guardEnabled: overrides.guardEnabled ?? false,
+    guardAllowedOperatorWallets: overrides.guardAllowedOperatorWallets ?? (overrides.guardEnabled ? [OWNER] : []),
     devAuthBypass: true,
     devAuthToken: "test-owner-token-that-is-long",
   });
@@ -37,7 +41,7 @@ async function fixture(t, overrides = {}) {
   };
   const db = new GoldKeyDatabase();
   const auth = createAuthService({ config, db, chain });
-  const app = createApp({ config, db, chain, auth, x402Middleware: overrides.x402Middleware });
+  const app = createApp({ config, db, chain, auth, guard: overrides.guard, x402Middleware: overrides.x402Middleware });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -341,11 +345,234 @@ test("Action Gate is first-class in OpenAPI and the fixed demo", async (t) => {
   assert.equal(example.result.receipt_canonicalization, "goldkey-c14n-v1");
 });
 
+test("Guard rejects invalid installation signatures before x402 and authorizes only after verification", async (t) => {
+  let middlewareCalls = 0;
+  let preflightCalls = 0;
+  let authorizeCalls = 0;
+  const envelope = {
+    schema: "goldkey.guard-authorization-envelope.v1",
+    receipt: { receipt_id: "receipt-1", decision: "BLOCK", reason_codes: ["policy_denied"] },
+    evidence: { schema: "goldkey.guard-evidence.v1", decision: "BLOCK", reason_codes: ["policy_denied"] },
+    receipt_sha256: "1".repeat(64),
+    signature: "A".repeat(86),
+  };
+  const guard = {
+    keyset: { schema: "goldkey.guard-receipt-keyset.v1", keys: [{ kty: "OKP", crv: "Ed25519", x: "A".repeat(43), kid: "guard-key-1" }] },
+    async preflight(body, expectedKinds) {
+      preflightCalls += 1;
+      if (body.signature === "valid-replay-signature") return { installation_id: "install-1", replay: true, payment_settled: true, replay_authorization: envelope };
+      if (body.signature === "valid-unsettled-replay-signature") return { installation_id: "install-1", replay: true, payment_settled: false };
+      if (body.signature !== "valid-installation-signature") throw new ServiceError(401, "invalid_guard_request_signature", "Invalid Guard request signature");
+      if (!expectedKinds.includes(body.call?.kind)) throw new ServiceError(400, "guard_route_kind_mismatch", "Wrong Guard route");
+      return { installation_id: "install-1" };
+    },
+    async authorize(body, expectedKinds) {
+      authorizeCalls += 1;
+      assert.ok(expectedKinds.includes(body.call.kind));
+      return envelope;
+    },
+    async registerPolicy() { return { replay: false, policy_id: "policy-1" }; },
+    async registerInstallation() { return { replay: false, installation_id: "install-1" }; },
+    async revoke(body) { return { target_kind: body.target_kind, target_id: body.target_id, revoked_at: "2026-08-11T00:00:00.000Z" }; },
+    async commit(body) { return { replay: false, execution_id: body.execution_id, status: "forwarding" }; },
+    async complete(body) { return { replay: false, execution_id: body.execution_id, status: "completed", outcome_status: body.outcome_status }; },
+  };
+  const x402Middleware = (req, res, next) => {
+    if (!req.path.startsWith("/v1/guard/paygo/authorize/")) return next();
+    middlewareCalls += 1;
+    if (req.get("payment-signature") === "accepted") return next();
+    res.status(402).set("payment-required", "guard-challenge").json({});
+  };
+  const { base } = await fixture(t, { x402Enabled: true, guardEnabled: true, guard, x402Middleware });
+
+  const invalid = await json(await fetch(`${base}/v1/guard/paygo/authorize/network`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "would-have-paid" },
+    body: JSON.stringify({ signature: "invalid", call: { kind: "https" } }),
+  }));
+  assert.equal(invalid.response.status, 401);
+  assert.equal(invalid.body.error.code, "invalid_guard_request_signature");
+  assert.equal(middlewareCalls, 0);
+  assert.equal(authorizeCalls, 0);
+
+  const request = { signature: "valid-installation-signature", call: { kind: "https" } };
+  const unpaid = await fetch(`${base}/v1/guard/paygo/authorize/network`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  assert.equal(unpaid.status, 402);
+  assert.equal(middlewareCalls, 1);
+  assert.equal(authorizeCalls, 0);
+
+  const paid = await json(await fetch(`${base}/v1/guard/paygo/authorize/network`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "accepted" },
+    body: JSON.stringify(request),
+  }));
+  assert.equal(paid.response.status, 200);
+  assert.deepEqual(paid.body, envelope);
+  assert.equal(paid.body.receipt.decision, "BLOCK");
+  assert.equal(middlewareCalls, 2);
+  assert.equal(preflightCalls, 3);
+  assert.equal(authorizeCalls, 1);
+
+  const failedSettlementReplay = await fetch(`${base}/v1/guard/paygo/authorize/network`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...request, signature: "valid-unsettled-replay-signature" }),
+  });
+  assert.equal(failedSettlementReplay.status, 402);
+  assert.equal(middlewareCalls, 3);
+  assert.equal(authorizeCalls, 1);
+
+  const replay = await json(await fetch(`${base}/v1/guard/paygo/authorize/network`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...request, signature: "valid-replay-signature" }),
+  }));
+  assert.equal(replay.response.status, 200);
+  assert.deepEqual(replay.body, envelope);
+  assert.equal(replay.response.headers.get("x-goldkey-idempotent-replay"), "true");
+  assert.equal(middlewareCalls, 3);
+  assert.equal(authorizeCalls, 1);
+
+  const wrongRoute = await json(await fetch(`${base}/v1/guard/paygo/authorize/evm`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": "accepted" },
+    body: JSON.stringify(request),
+  }));
+  assert.equal(wrongRoute.response.status, 400);
+  assert.equal(wrongRoute.body.error.code, "guard_route_kind_mismatch");
+  assert.equal(middlewareCalls, 3);
+  assert.equal(authorizeCalls, 1);
+  assert.equal(preflightCalls, 6);
+});
+
+test("Guard rechecks authoritative policy state immediately before settlement", async () => {
+  const calls = [];
+  const guard = {
+    async beginPaymentSettlement(body, expectedKinds, claimId) {
+      calls.push({ body, expectedKinds, claimId });
+      if (body.state !== "active") {
+        throw new ServiceError(409, `guard_${body.state}`, `Sensitive ${body.state} details`);
+      }
+      return { installation_id: "install-1" };
+    },
+  };
+  const hook = createGuardBeforeSettlementHook(createGuardBeforeSettlementRecheck(guard));
+  const activeBody = { state: "active", call: { kind: "https" } };
+  const active = await hook({
+    transportContext: {
+      request: {
+        path: "/v1/guard/paygo/authorize/network",
+        adapter: { getBody: () => activeBody },
+      },
+    },
+  });
+  assert.equal(active, undefined);
+  assert.equal(calls[0].body, activeBody);
+  assert.deepEqual(calls[0].expectedKinds, ["mcp_tool", "https"]);
+  assert.match(calls[0].claimId, /^[0-9a-f-]{36}$/);
+
+  for (const state of ["revoked", "expired", "inactive"]) {
+    const blocked = await hook({
+      transportContext: {
+        request: {
+          path: "/v1/guard/paygo/authorize/evm",
+          adapter: { getBody: () => ({ state, call: { kind: "evm_transaction" } }) },
+        },
+      },
+    });
+    assert.deepEqual(blocked, {
+      abort: true,
+      reason: "guard_authorization_inactive",
+      message: "Guard authorization is no longer active",
+    });
+    if (state !== "inactive") assert.doesNotMatch(JSON.stringify(blocked), new RegExp(state));
+    assert.doesNotMatch(JSON.stringify(blocked), /Sensitive|details/);
+  }
+  assert.deepEqual(calls.slice(1).map(({ expectedKinds }) => expectedKinds), [
+    ["evm_transaction"],
+    ["evm_transaction"],
+    ["evm_transaction"],
+  ]);
+});
+
+test("Guard exposes signed registration, keyset, lifecycle, catalog, and OpenAPI surfaces", async (t) => {
+  const calls = [];
+  const keyset = { schema: "goldkey.guard-receipt-keyset.v1", keys: [{ kty: "OKP", crv: "Ed25519", x: "A".repeat(43), kid: "guard-key-1" }] };
+  const guard = {
+    keyset,
+    async preflight() { throw new Error("not used"); },
+    async authorize() { throw new Error("not used"); },
+    async registerPolicy(body) { calls.push(["policy", body]); return { replay: false, policy_id: "policy-1" }; },
+    async registerInstallation(body) { calls.push(["installation", body]); return { replay: true, installation_id: "install-1" }; },
+    async revoke(body) { calls.push(["revocation", body]); return { target_kind: body.target_kind, target_id: body.target_id, revoked_at: "2026-08-11T00:00:00.000Z" }; },
+    async commit(body) { calls.push(["commit", body]); return { replay: false, execution_id: body.execution_id, status: "forwarding" }; },
+    async reconcileCommit(body) { calls.push(["reconcile-commit", body]); return { replay: false, execution_id: body.commit.execution_id, status: "forwarding", payment_reconciled: true }; },
+    async complete(body) { calls.push(["complete", body]); return { replay: false, execution_id: body.execution_id, status: "completed" }; },
+  };
+  const { base } = await fixture(t, { x402Enabled: true, guardEnabled: true, guard, x402Middleware: (_req, _res, next) => next() });
+
+  const keys = await json(await fetch(`${base}/.well-known/goldkey-guard-keys.json`));
+  assert.equal(keys.response.status, 200);
+  assert.deepEqual(keys.body, keyset);
+  assert.match(keys.response.headers.get("cache-control"), /max-age=60/);
+
+  const guardTerms = await fetch(`${base}/guard/terms`);
+  assert.equal(guardTerms.status, 200);
+  assert.match(guardTerms.headers.get("content-type"), /^text\/markdown/);
+  assert.match(await guardTerms.text(), /separate from the immutable GoldKey utility-pass terms/i);
+
+  const policy = await json(await fetch(`${base}/v1/guard/policies`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ signed: "policy" }) }));
+  assert.equal(policy.response.status, 201);
+  const installation = await json(await fetch(`${base}/v1/guard/installations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ signed: "installation" }) }));
+  assert.equal(installation.response.status, 200);
+  const revocation = await json(await fetch(`${base}/v1/guard/revocations`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target_kind: "installation", target_id: "install-1" }) }));
+  assert.equal(revocation.response.status, 200);
+  assert.equal(revocation.body.target_id, "install-1");
+
+  const executionId = "receipt-1";
+  const commit = await json(await fetch(`${base}/v1/guard/executions/${executionId}/commit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ execution_id: executionId }) }));
+  assert.equal(commit.body.status, "forwarding");
+  const reconciled = await json(await fetch(`${base}/v1/guard/executions/${executionId}/reconcile-commit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commit: { execution_id: executionId }, payment_proof: {} }) }));
+  assert.equal(reconciled.body.payment_reconciled, true);
+  const complete = await json(await fetch(`${base}/v1/guard/executions/${executionId}/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ execution_id: executionId }) }));
+  assert.equal(complete.body.status, "completed");
+  const mismatch = await json(await fetch(`${base}/v1/guard/executions/${executionId}/commit`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ execution_id: "receipt-2" }) }));
+  assert.equal(mismatch.response.status, 409);
+  assert.equal(mismatch.body.error.code, "guard_lifecycle_mismatch");
+
+  const catalogResponse = await json(await fetch(`${base}/v1/catalog`));
+  assert.deepEqual(catalogResponse.body.pricing.guard, {
+    mcp_or_https_authorization_usdc: "0.05",
+    evm_authorization_usdc: "0.10",
+    pass_included: false,
+  });
+  const openapi = await json(await fetch(`${base}/openapi.json`));
+  assert.equal(openapi.body.paths["/v1/guard/paygo/authorize/network"].post["x-payment-info"].price.amount, "0.05");
+  assert.equal(openapi.body.paths["/v1/guard/paygo/authorize/evm"].post["x-payment-info"].price.amount, "0.10");
+  assert.match(openapi.body.paths["/v1/guard/paygo/authorize/network"].post.description, /never forwards/i);
+  assert.match(openapi.body.paths["/v1/guard/paygo/authorize/evm"].post.description, /never signs or broadcasts/i);
+  assert.equal(openapi.body.paths["/v1/guard/executions/{executionId}/reconcile-commit"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/GuardReconciledCommit");
+  assert.equal(openapi.body.components.schemas.GuardReconciledCommit.properties.commit.$ref, "#/components/schemas/GuardCommit");
+  assert.equal(openapi.body.components.schemas.GuardReconciledCommit.properties.payment_proof.properties.payment_payload.properties.accepted.properties.network.const, "eip155:8453");
+  assert.ok(openapi.body.components.schemas.GuardInstallation.required.includes("key_proof"));
+  assert.equal(openapi.body.components.schemas.GuardInstallation.properties.installation_id.pattern, "^gki_[A-Za-z0-9_-]{43}$");
+  const policyConnectors = openapi.body.components.schemas.GuardPolicy.properties.connectors.items.oneOf;
+  assert.equal(policyConnectors[0].properties.tools.items.properties.arguments_schema.type, "object");
+  assert.equal(policyConnectors[1].properties.operations.items.properties.query_schema.type, "object");
+  assert.equal(policyConnectors[1].properties.operations.items.properties.body_schema.type, "object");
+  assert.deepEqual(calls.map(([name]) => name), ["policy", "installation", "revocation", "commit", "reconcile-commit", "complete"]);
+});
+
 test("terms, schema, and renewal quotes are machine-readable", async (t) => {
   const { base, expire } = await fixture(t);
   const terms = await fetch(`${base}/terms`);
   assert.equal(terms.status, 200);
   assert.match(await terms.text(), /50 USDC/);
+  assert.equal((await fetch(`${base}/guard/terms`)).status, 404);
   const schema = await json(await fetch(`${base}/schemas/commerce-response-v1.json`));
   assert.equal(schema.response.status, 200);
   assert.equal(schema.body.type, "object");

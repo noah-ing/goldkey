@@ -14,6 +14,137 @@ function secureEqual(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+function requireNonEmptyString(value, field) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requireJsonObjectText(value, field) {
+  requireNonEmptyString(value, field);
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must contain valid JSON`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must contain a JSON object`);
+  }
+  return parsed;
+}
+
+function requirePublicJwk(value) {
+  const jwk = requireJsonObjectText(value, "publicKeyJwkJson");
+  for (const privateField of ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]) {
+    if (Object.hasOwn(jwk, privateField)) {
+      throw new ServiceError(400, "private_jwk_forbidden", "publicKeyJwkJson must not contain private or symmetric key material");
+    }
+  }
+  requireNonEmptyString(jwk.kty, "publicKeyJwkJson.kty");
+  return jwk;
+}
+
+function requireMillis(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be a non-negative millisecond timestamp`);
+  }
+  return value;
+}
+
+function requireAtomic(value, field, { positive = false } = {}) {
+  if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value) || value.length > 78) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be a canonical atomic-unit integer string`);
+  }
+  if (positive && value === "0") {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be greater than zero`);
+  }
+  return value;
+}
+
+function requireSha256(value, field) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be a lowercase SHA-256 hex digest`);
+  }
+  return value;
+}
+
+function requirePositiveIntegerString(value, field) {
+  if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
+    throw new ServiceError(400, "invalid_guard_record", `${field} must be a canonical positive integer string`);
+  }
+  return value;
+}
+
+function normalizeGuardReservations({
+  reservations,
+  reservationKey,
+  reservationAmountAtomic,
+  spendCapAtomic,
+}) {
+  const legacyValues = [reservationKey, reservationAmountAtomic, spendCapAtomic];
+  const hasLegacy = legacyValues.some((value) => value !== null && value !== undefined);
+  if (reservations !== undefined && hasLegacy) {
+    throw new ServiceError(400, "invalid_guard_record", "reservations cannot be combined with legacy reservation fields");
+  }
+  let values;
+  if (reservations !== undefined) {
+    if (!Array.isArray(reservations) || reservations.length > 8) {
+      throw new ServiceError(400, "invalid_guard_record", "reservations must contain at most eight entries");
+    }
+    values = reservations;
+  } else if (hasLegacy) {
+    if (legacyValues.some((value) => value === null || value === undefined)) {
+      throw new ServiceError(400, "invalid_guard_record", "reservationKey, reservationAmountAtomic, and spendCapAtomic must be supplied together");
+    }
+    values = [{ reservationKey, reservationAmountAtomic, spendCapAtomic }];
+  } else {
+    values = [];
+  }
+  const normalized = values.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ServiceError(400, "invalid_guard_record", `reservations[${index}] must be an object`);
+    }
+    const extras = Object.keys(entry).filter((key) => !new Set(["reservationKey", "reservationAmountAtomic", "spendCapAtomic"]).has(key));
+    if (extras.length > 0) throw new ServiceError(400, "invalid_guard_record", `reservations[${index}] contains unsupported fields`);
+    requireNonEmptyString(entry.reservationKey, `reservations[${index}].reservationKey`);
+    if (entry.reservationKey.length > 512 || /[\r\n\0]/.test(entry.reservationKey)) {
+      throw new ServiceError(400, "invalid_guard_record", `reservations[${index}].reservationKey is not bounded`);
+    }
+    requireAtomic(entry.reservationAmountAtomic, `reservations[${index}].reservationAmountAtomic`, { positive: true });
+    requireAtomic(entry.spendCapAtomic, `reservations[${index}].spendCapAtomic`);
+    if (BigInt(entry.reservationAmountAtomic) > BigInt(entry.spendCapAtomic)) {
+      throw new ServiceError(402, "guard_spend_cap_exceeded", "Spend reservation exceeds the authoritative period cap");
+    }
+    return {
+      reservationKey: entry.reservationKey,
+      reservationAmountAtomic: entry.reservationAmountAtomic,
+      spendCapAtomic: entry.spendCapAtomic,
+    };
+  }).sort((left, right) => left.reservationKey.localeCompare(right.reservationKey));
+  if (new Set(normalized.map(({ reservationKey: key }) => key)).size !== normalized.length) {
+    throw new ServiceError(400, "invalid_guard_record", "reservations must use distinct reservation keys");
+  }
+  return normalized;
+}
+
+function guardExecutionRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    lifecycle_status: row.revoked_at !== null
+      ? "revoked"
+      : row.completed_at !== null
+        ? "completed"
+        : row.committed_at !== null
+          ? "forwarding"
+          : row.expired_at !== null
+            ? "expired"
+            : row.status,
+  };
+}
+
 export class GoldKeyDatabase {
   constructor(filename = ":memory:") {
     if (filename !== ":memory:") mkdirSync(path.dirname(filename), { recursive: true });
@@ -98,8 +229,171 @@ export class GoldKeyDatabase {
         PRIMARY KEY (token_id, term_number, day, tool)
       ) STRICT, WITHOUT ROWID;
 
+      CREATE TABLE IF NOT EXISTS guard_policy_versions (
+        policy_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        policy_hash TEXT NOT NULL UNIQUE,
+        policy_json TEXT NOT NULL,
+        operator_wallet TEXT NOT NULL,
+        operator_signature TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        PRIMARY KEY (policy_id, version),
+        CHECK (version GLOB '[1-9]*' AND version NOT GLOB '*[^0-9]*'),
+        CHECK (length(policy_hash) = 64 AND policy_hash NOT GLOB '*[^0-9a-f]*'),
+        CHECK (expires_at > created_at),
+        CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE IF NOT EXISTS guard_installations (
+        id TEXT PRIMARY KEY,
+        operator_wallet TEXT NOT NULL,
+        policy_hash TEXT NOT NULL REFERENCES guard_policy_versions(policy_hash),
+        public_key_jwk_json TEXT NOT NULL,
+        binding_json TEXT NOT NULL,
+        operator_signature TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        revoked_at INTEGER,
+        CHECK (expires_at > created_at),
+        CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS guard_spend_periods (
+        reservation_key TEXT PRIMARY KEY,
+        cap_atomic TEXT NOT NULL,
+        reserved_atomic TEXT NOT NULL DEFAULT '0',
+        spent_atomic TEXT NOT NULL DEFAULT '0',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS guard_executions (
+        id TEXT PRIMARY KEY,
+        installation_id TEXT NOT NULL REFERENCES guard_installations(id),
+        idempotency_key TEXT NOT NULL,
+        call_hash TEXT NOT NULL,
+        policy_hash TEXT NOT NULL REFERENCES guard_policy_versions(policy_hash),
+        decision TEXT NOT NULL,
+        status TEXT NOT NULL,
+        authorization_receipt_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        reservation_key TEXT,
+        reservation_amount_atomic TEXT,
+        completion_receipt_json TEXT,
+        outcome_status TEXT,
+        outcome_hash TEXT,
+        spend_disposition TEXT,
+        committed_at INTEGER,
+        completed_at INTEGER,
+        expired_at INTEGER,
+        revoked_at INTEGER,
+        settlement_started_at INTEGER,
+        settlement_claim_id TEXT,
+        settlement_payment_hash TEXT,
+        settlement_payment_identity_hash TEXT,
+        payment_settled_at INTEGER,
+        payment_transaction TEXT,
+        UNIQUE (installation_id, idempotency_key),
+        CHECK (expires_at > created_at),
+        CHECK (decision IN ('ALLOW', 'REVIEW', 'BLOCK')),
+        CHECK (status IN ('authorized', 'denied', 'review')),
+        CHECK (
+          (decision = 'ALLOW' AND status = 'authorized')
+          OR (decision = 'BLOCK' AND status = 'denied')
+          OR (decision = 'REVIEW' AND status = 'review')
+        ),
+        CHECK (length(call_hash) = 64 AND call_hash NOT GLOB '*[^0-9a-f]*'),
+        CHECK (length(policy_hash) = 64 AND policy_hash NOT GLOB '*[^0-9a-f]*'),
+        CHECK ((reservation_key IS NULL) = (reservation_amount_atomic IS NULL)),
+        CHECK ((completed_at IS NULL) = (completion_receipt_json IS NULL)),
+        CHECK ((completed_at IS NULL) = (outcome_status IS NULL)),
+        CHECK ((completed_at IS NULL) = (outcome_hash IS NULL)),
+        CHECK (outcome_status IS NULL OR outcome_status IN ('succeeded', 'failed', 'outcome_unknown')),
+        CHECK (outcome_hash IS NULL OR (length(outcome_hash) = 64 AND outcome_hash NOT GLOB '*[^0-9a-f]*')),
+        CHECK (completed_at IS NULL OR committed_at IS NOT NULL),
+        CHECK (committed_at IS NULL OR (committed_at >= created_at AND committed_at < expires_at)),
+        CHECK (completed_at IS NULL OR completed_at >= committed_at),
+        CHECK (NOT (expired_at IS NOT NULL AND revoked_at IS NOT NULL)),
+        CHECK (committed_at IS NULL OR (expired_at IS NULL AND revoked_at IS NULL)),
+        CHECK ((settlement_started_at IS NULL) = (settlement_claim_id IS NULL)),
+        CHECK ((settlement_payment_hash IS NULL) = (settlement_payment_identity_hash IS NULL)),
+        CHECK (settlement_started_at IS NULL OR settlement_payment_hash IS NOT NULL),
+        CHECK (settlement_payment_hash IS NULL OR (length(settlement_payment_hash) = 64 AND settlement_payment_hash NOT GLOB '*[^0-9a-f]*')),
+        CHECK (settlement_payment_identity_hash IS NULL OR (length(settlement_payment_identity_hash) = 64 AND settlement_payment_identity_hash NOT GLOB '*[^0-9a-f]*')),
+        CHECK (
+          (committed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL AND spend_disposition IS NULL)
+          OR (committed_at IS NOT NULL AND expired_at IS NULL AND revoked_at IS NULL AND spend_disposition IN ('committed', 'none'))
+          OR (committed_at IS NULL AND completed_at IS NULL AND (expired_at IS NOT NULL OR revoked_at IS NOT NULL)
+            AND spend_disposition IN ('released', 'none'))
+        ),
+        CHECK (expired_at IS NULL OR expired_at >= expires_at),
+        CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS guard_execution_reservations (
+        execution_id TEXT NOT NULL REFERENCES guard_executions(id) ON DELETE CASCADE,
+        installation_id TEXT NOT NULL,
+        reservation_key TEXT NOT NULL,
+        amount_atomic TEXT NOT NULL,
+        cap_atomic TEXT NOT NULL,
+        disposition TEXT NOT NULL DEFAULT 'reserved',
+        PRIMARY KEY (execution_id, reservation_key),
+        FOREIGN KEY (reservation_key) REFERENCES guard_spend_periods(reservation_key),
+        CHECK (amount_atomic GLOB '[1-9]*' AND amount_atomic NOT GLOB '*[^0-9]*'),
+        CHECK ((cap_atomic = '0') OR (cap_atomic GLOB '[1-9]*' AND cap_atomic NOT GLOB '*[^0-9]*')),
+        CHECK (disposition IN ('reserved', 'committed', 'released'))
+      ) STRICT, WITHOUT ROWID;
+
       CREATE INDEX IF NOT EXISTS session_expiry_idx ON sessions(expires_at);
       CREATE INDEX IF NOT EXISTS access_key_token_idx ON access_keys(token_id, term_number);
+      CREATE INDEX IF NOT EXISTS guard_installation_policy_idx ON guard_installations(policy_hash);
+      CREATE INDEX IF NOT EXISTS guard_execution_installation_idx ON guard_executions(installation_id, created_at);
+      CREATE INDEX IF NOT EXISTS guard_reservation_period_idx ON guard_execution_reservations(reservation_key, disposition);
+    `);
+    const guardExecutionColumns = new Set(this.db.prepare("PRAGMA table_info(guard_executions)").all().map(({ name }) => name));
+    if (!guardExecutionColumns.has("payment_settled_at")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN payment_settled_at INTEGER");
+    }
+    if (!guardExecutionColumns.has("settlement_started_at")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN settlement_started_at INTEGER");
+    }
+    if (!guardExecutionColumns.has("settlement_claim_id")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN settlement_claim_id TEXT");
+    }
+    if (!guardExecutionColumns.has("payment_transaction")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN payment_transaction TEXT");
+    }
+    if (!guardExecutionColumns.has("settlement_payment_hash")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN settlement_payment_hash TEXT");
+    }
+    if (!guardExecutionColumns.has("settlement_payment_identity_hash")) {
+      this.db.exec("ALTER TABLE guard_executions ADD COLUMN settlement_payment_identity_hash TEXT");
+    }
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS guard_settlement_payment_identity_unique
+      ON guard_executions(settlement_payment_identity_hash)
+      WHERE settlement_payment_identity_hash IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS guard_payment_transaction_unique
+      ON guard_executions(payment_transaction)
+      WHERE payment_transaction IS NOT NULL;
+    `);
+    this.db.exec(`
+      INSERT OR IGNORE INTO guard_execution_reservations(
+        execution_id, installation_id, reservation_key, amount_atomic, cap_atomic, disposition
+      )
+      SELECT e.id, e.installation_id, e.reservation_key, e.reservation_amount_atomic, p.cap_atomic,
+        CASE
+          WHEN e.committed_at IS NOT NULL THEN 'committed'
+          WHEN e.expired_at IS NOT NULL OR e.revoked_at IS NOT NULL THEN 'released'
+          ELSE 'reserved'
+        END
+      FROM guard_executions e
+      JOIN guard_spend_periods p
+        ON p.reservation_key = e.reservation_key
+      WHERE e.reservation_key IS NOT NULL
     `);
   }
 
@@ -310,6 +604,811 @@ export class GoldKeyDatabase {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  createGuardPolicyVersion({
+    policyId,
+    version,
+    policyHash,
+    policyJson,
+    operatorWallet,
+    operatorSignature,
+    createdAt = Date.now(),
+    expiresAt,
+    revokedAt = null,
+  }) {
+    requireNonEmptyString(policyId, "policyId");
+    requirePositiveIntegerString(version, "version");
+    requireSha256(policyHash, "policyHash");
+    requireJsonObjectText(policyJson, "policyJson");
+    requireNonEmptyString(operatorWallet, "operatorWallet");
+    requireNonEmptyString(operatorSignature, "operatorSignature");
+    requireMillis(createdAt, "createdAt");
+    requireMillis(expiresAt, "expiresAt");
+    if (expiresAt <= createdAt) throw new ServiceError(400, "invalid_guard_record", "expiresAt must be after createdAt");
+    if (revokedAt !== null) {
+      requireMillis(revokedAt, "revokedAt");
+      if (revokedAt < createdAt) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede createdAt");
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const conflict = this.db.prepare(`
+        SELECT policy_id, version, policy_hash FROM guard_policy_versions
+        WHERE (policy_id = ? AND version = ?) OR policy_hash = ?
+      `).get(policyId, version, policyHash);
+      if (conflict) throw new ServiceError(409, "guard_policy_conflict", "Guard policy version or hash already exists", conflict);
+      const latest = this.db.prepare(`
+        SELECT version, operator_wallet FROM guard_policy_versions
+        WHERE policy_id = ? ORDER BY length(version) DESC, version DESC LIMIT 1
+      `).get(policyId);
+      if (latest && latest.operator_wallet.toLowerCase() !== operatorWallet.toLowerCase()) {
+        throw new ServiceError(409, "guard_policy_operator_change_requires_rotation", "A Guard policy ID cannot change operator without an explicit ownership-rotation protocol", {
+          current_operator_wallet: latest.operator_wallet,
+          requested_operator_wallet: operatorWallet,
+        });
+      }
+      if (latest && BigInt(version) <= BigInt(latest.version)) {
+        throw new ServiceError(409, "guard_policy_version_not_monotonic", "Guard policy version must increase monotonically", {
+          latest_version: latest.version,
+          requested_version: version,
+        });
+      }
+      this.db.prepare(`
+        INSERT INTO guard_policy_versions(
+          policy_id, version, policy_hash, policy_json, operator_wallet,
+          operator_signature, created_at, expires_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(policyId, version, policyHash, policyJson, operatorWallet, operatorSignature, createdAt, expiresAt, revokedAt);
+      this.db.exec("COMMIT");
+      return this.getGuardPolicyVersion(policyId, version);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getGuardPolicyVersion(policyId, version) {
+    return this.db.prepare(`
+      SELECT * FROM guard_policy_versions WHERE policy_id = ? AND version = ?
+    `).get(policyId, version);
+  }
+
+  getGuardPolicyVersionByHash(policyHash) {
+    return this.db.prepare("SELECT * FROM guard_policy_versions WHERE policy_hash = ?").get(policyHash);
+  }
+
+  getLatestGuardPolicyVersion(policyId) {
+    return this.db.prepare(`
+      SELECT * FROM guard_policy_versions
+      WHERE policy_id = ? ORDER BY length(version) DESC, version DESC LIMIT 1
+    `).get(policyId);
+  }
+
+  revokeGuardPolicyVersion(policyHash, revokedAt = Date.now()) {
+    requireSha256(policyHash, "policyHash");
+    requireMillis(revokedAt, "revokedAt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.db.prepare("SELECT * FROM guard_policy_versions WHERE policy_hash = ?").get(policyHash);
+      if (!current) throw new ServiceError(404, "guard_policy_not_found", "Guard policy version does not exist");
+      if (revokedAt < current.created_at) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede createdAt");
+      if (current.revoked_at === null) {
+        this.#revokePendingGuardExecutions("policy_hash = ?", [policyHash], revokedAt);
+        this.db.prepare("UPDATE guard_policy_versions SET revoked_at = ? WHERE policy_hash = ? AND revoked_at IS NULL").run(revokedAt, policyHash);
+      }
+      const revoked = this.db.prepare("SELECT * FROM guard_policy_versions WHERE policy_hash = ?").get(policyHash);
+      this.db.exec("COMMIT");
+      return revoked;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  createGuardInstallation({
+    installationId,
+    operatorWallet,
+    policyHash,
+    publicKeyJwkJson,
+    bindingJson,
+    operatorSignature,
+    createdAt = Date.now(),
+    expiresAt,
+    revokedAt = null,
+  }) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(operatorWallet, "operatorWallet");
+    requireSha256(policyHash, "policyHash");
+    requirePublicJwk(publicKeyJwkJson);
+    requireJsonObjectText(bindingJson, "bindingJson");
+    requireNonEmptyString(operatorSignature, "operatorSignature");
+    requireMillis(createdAt, "createdAt");
+    requireMillis(expiresAt, "expiresAt");
+    if (expiresAt <= createdAt) throw new ServiceError(400, "invalid_guard_record", "expiresAt must be after createdAt");
+    if (revokedAt !== null) {
+      requireMillis(revokedAt, "revokedAt");
+      if (revokedAt < createdAt) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede createdAt");
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const policy = this.db.prepare("SELECT * FROM guard_policy_versions WHERE policy_hash = ?").get(policyHash);
+      if (!policy) throw new ServiceError(404, "guard_policy_not_found", "Guard policy version does not exist");
+      if (policy.operator_wallet !== operatorWallet) {
+        throw new ServiceError(409, "guard_operator_mismatch", "Installation operator does not match the policy operator");
+      }
+      if (policy.expires_at <= createdAt || (policy.revoked_at !== null && policy.revoked_at <= createdAt)) {
+        throw new ServiceError(403, "guard_policy_inactive", "Guard policy version is expired or revoked");
+      }
+      if (expiresAt > policy.expires_at) {
+        throw new ServiceError(400, "invalid_guard_record", "Installation cannot outlive its pinned policy version");
+      }
+      if (this.db.prepare("SELECT id FROM guard_installations WHERE id = ?").get(installationId)) {
+        throw new ServiceError(409, "guard_installation_conflict", "Guard installation already exists");
+      }
+      this.db.prepare(`
+        INSERT INTO guard_installations(
+          id, operator_wallet, policy_hash, public_key_jwk_json, binding_json,
+          operator_signature, created_at, expires_at, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(installationId, operatorWallet, policyHash, publicKeyJwkJson, bindingJson, operatorSignature, createdAt, expiresAt, revokedAt);
+      this.db.exec("COMMIT");
+      return this.getGuardInstallation(installationId);
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getGuardInstallation(installationId) {
+    return this.db.prepare("SELECT * FROM guard_installations WHERE id = ?").get(installationId);
+  }
+
+  revokeGuardInstallation(installationId, revokedAt = Date.now()) {
+    requireNonEmptyString(installationId, "installationId");
+    requireMillis(revokedAt, "revokedAt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.db.prepare("SELECT * FROM guard_installations WHERE id = ?").get(installationId);
+      if (!current) throw new ServiceError(404, "guard_installation_not_found", "Guard installation does not exist");
+      if (revokedAt < current.created_at) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede createdAt");
+      if (current.revoked_at === null) {
+        this.#revokePendingGuardExecutions("installation_id = ?", [installationId], revokedAt);
+        this.db.prepare("UPDATE guard_installations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").run(revokedAt, installationId);
+      }
+      const revoked = this.db.prepare("SELECT * FROM guard_installations WHERE id = ?").get(installationId);
+      this.db.exec("COMMIT");
+      return revoked;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  reserveGuardExecution({
+    executionId,
+    installationId,
+    idempotencyKey,
+    callHash,
+    policyHash,
+    decision,
+    status,
+    authorizationReceiptJson,
+    createdAt = Date.now(),
+    expiresAt,
+    reservationKey = null,
+    reservationAmountAtomic = null,
+    spendCapAtomic = null,
+    reservations,
+  }) {
+    for (const [value, field] of [
+      [executionId, "executionId"],
+      [installationId, "installationId"],
+      [idempotencyKey, "idempotencyKey"],
+      [decision, "decision"],
+      [status, "status"],
+    ]) requireNonEmptyString(value, field);
+    requireSha256(callHash, "callHash");
+    requireSha256(policyHash, "policyHash");
+    if (!new Set(["ALLOW", "REVIEW", "BLOCK"]).has(decision)) {
+      throw new ServiceError(400, "invalid_guard_record", "decision must be ALLOW, REVIEW, or BLOCK");
+    }
+    const expectedStatus = { ALLOW: "authorized", REVIEW: "review", BLOCK: "denied" }[decision];
+    if (status !== expectedStatus) {
+      throw new ServiceError(400, "invalid_guard_record", `status must be ${expectedStatus} for decision ${decision}`);
+    }
+    requireJsonObjectText(authorizationReceiptJson, "authorizationReceiptJson");
+    requireMillis(createdAt, "createdAt");
+    requireMillis(expiresAt, "expiresAt");
+    if (expiresAt <= createdAt) throw new ServiceError(400, "invalid_guard_record", "expiresAt must be after createdAt");
+
+    const reservationList = normalizeGuardReservations({
+      reservations,
+      reservationKey,
+      reservationAmountAtomic,
+      spendCapAtomic,
+    });
+    const hasReservation = reservationList.length > 0;
+    if (hasReservation && status !== "authorized") {
+      throw new ServiceError(400, "invalid_guard_record", "Only authorized ALLOW executions may reserve spend");
+    }
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previous = this.db.prepare(`
+        SELECT * FROM guard_executions WHERE installation_id = ? AND idempotency_key = ?
+      `).get(installationId, idempotencyKey);
+      if (previous) {
+        if (previous.call_hash !== callHash) {
+          throw new ServiceError(409, "idempotency_conflict", "Idempotency key was already used with a different call hash");
+        }
+        if (previous.reservation_key !== null && previous.expired_at === null && previous.expires_at <= createdAt) {
+          this.#releaseExpiredGuardReservations(previous.reservation_key, createdAt);
+        }
+        const replay = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(previous.id);
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(replay) };
+      }
+
+      const installation = this.db.prepare(`
+        SELECT i.*, p.expires_at AS policy_expires_at, p.revoked_at AS policy_revoked_at
+        FROM guard_installations i
+        JOIN guard_policy_versions p ON p.policy_hash = i.policy_hash
+        WHERE i.id = ?
+      `).get(installationId);
+      if (!installation) throw new ServiceError(404, "guard_installation_not_found", "Guard installation does not exist");
+      if (installation.policy_hash !== policyHash) {
+        throw new ServiceError(409, "guard_policy_mismatch", "Execution policy hash does not match the installation");
+      }
+      if (installation.expires_at <= createdAt || installation.revoked_at !== null) {
+        throw new ServiceError(403, "guard_installation_inactive", "Guard installation is expired or revoked");
+      }
+      if (installation.policy_expires_at <= createdAt || installation.policy_revoked_at !== null) {
+        throw new ServiceError(403, "guard_policy_inactive", "Guard policy version is expired or revoked");
+      }
+      if (expiresAt > Math.min(installation.expires_at, installation.policy_expires_at)) {
+        throw new ServiceError(400, "invalid_guard_record", "Execution cannot outlive its installation or policy version");
+      }
+
+      for (const reservation of reservationList) {
+        this.#releaseExpiredGuardReservations(reservation.reservationKey, createdAt);
+        const amount = BigInt(reservation.reservationAmountAtomic);
+        const cap = BigInt(reservation.spendCapAtomic);
+        const period = this.db.prepare(`
+          SELECT * FROM guard_spend_periods WHERE reservation_key = ?
+        `).get(reservation.reservationKey);
+        if (!period) {
+          if (amount > cap) throw new ServiceError(402, "guard_spend_cap_exceeded", "Spend reservation exceeds the authoritative period cap");
+          this.db.prepare(`
+            INSERT INTO guard_spend_periods(
+              reservation_key, cap_atomic, reserved_atomic, spent_atomic, created_at, updated_at
+            ) VALUES (?, ?, ?, '0', ?, ?)
+          `).run(
+            reservation.reservationKey,
+            reservation.spendCapAtomic,
+            reservation.reservationAmountAtomic,
+            createdAt,
+            createdAt,
+          );
+        } else {
+          if (period.cap_atomic !== reservation.spendCapAtomic) {
+            throw new ServiceError(409, "guard_spend_cap_conflict", "Spend period was already created with a different cap");
+          }
+          const nextReserved = BigInt(period.reserved_atomic) + amount;
+          if (nextReserved + BigInt(period.spent_atomic) > cap) {
+            throw new ServiceError(402, "guard_spend_cap_exceeded", "Spend reservation exceeds the authoritative period cap", {
+              cap_atomic: reservation.spendCapAtomic,
+              reserved_atomic: period.reserved_atomic,
+              spent_atomic: period.spent_atomic,
+              requested_atomic: reservation.reservationAmountAtomic,
+            });
+          }
+          this.db.prepare(`
+            UPDATE guard_spend_periods SET reserved_atomic = ?, updated_at = ?
+            WHERE reservation_key = ?
+          `).run(nextReserved.toString(), createdAt, reservation.reservationKey);
+        }
+      }
+
+      const primaryReservation = reservationList[0];
+
+      this.db.prepare(`
+        INSERT INTO guard_executions(
+          id, installation_id, idempotency_key, call_hash, policy_hash, decision, status,
+          authorization_receipt_json, created_at, expires_at, reservation_key, reservation_amount_atomic
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        executionId,
+        installationId,
+        idempotencyKey,
+        callHash,
+        policyHash,
+        decision,
+        status,
+        authorizationReceiptJson,
+        createdAt,
+        expiresAt,
+        primaryReservation?.reservationKey ?? null,
+        primaryReservation?.reservationAmountAtomic ?? null,
+      );
+      for (const reservation of reservationList) {
+        this.db.prepare(`
+          INSERT INTO guard_execution_reservations(
+            execution_id, installation_id, reservation_key, amount_atomic, cap_atomic, disposition
+          ) VALUES (?, ?, ?, ?, ?, 'reserved')
+        `).run(
+          executionId,
+          installationId,
+          reservation.reservationKey,
+          reservation.reservationAmountAtomic,
+          reservation.spendCapAtomic,
+        );
+      }
+      const execution = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(execution) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getGuardExecution(executionId) {
+    return guardExecutionRow(this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId));
+  }
+
+  getGuardExecutionByIdempotency(installationId, idempotencyKey) {
+    return guardExecutionRow(this.db.prepare(`
+      SELECT * FROM guard_executions WHERE installation_id = ? AND idempotency_key = ?
+    `).get(installationId, idempotencyKey));
+  }
+
+  beginGuardExecutionSettlement({
+    installationId,
+    idempotencyKey,
+    callHash,
+    settlementClaimId,
+    paymentSha256,
+    paymentIdentitySha256,
+    startedAt = Date.now(),
+  }) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(idempotencyKey, "idempotencyKey");
+    requireSha256(callHash, "callHash");
+    requireNonEmptyString(settlementClaimId, "settlementClaimId");
+    if (settlementClaimId.length > 128) throw new ServiceError(400, "invalid_guard_record", "settlementClaimId is too long");
+    requireSha256(paymentSha256, "paymentSha256");
+    requireSha256(paymentIdentitySha256, "paymentIdentitySha256");
+    requireMillis(startedAt, "startedAt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const execution = this.db.prepare(`
+        SELECT e.*, i.expires_at AS installation_expires_at, i.revoked_at AS installation_revoked_at,
+               p.expires_at AS policy_expires_at, p.revoked_at AS policy_revoked_at
+        FROM guard_executions e
+        JOIN guard_installations i ON i.id = e.installation_id
+        JOIN guard_policy_versions p ON p.policy_hash = e.policy_hash
+        WHERE e.installation_id = ? AND e.idempotency_key = ?
+      `).get(installationId, idempotencyKey);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist for settlement");
+      if (execution.call_hash !== callHash) throw new ServiceError(409, "idempotency_conflict", "Settlement request does not match the stored call hash");
+      if (execution.revoked_at !== null || execution.expired_at !== null || execution.committed_at !== null) {
+        throw new ServiceError(409, "guard_execution_inactive", "Guard execution is no longer eligible for settlement");
+      }
+      if (startedAt < execution.created_at || startedAt >= execution.expires_at) {
+        throw new ServiceError(409, "guard_execution_expired", "Guard execution expired before settlement began");
+      }
+      if (execution.installation_revoked_at !== null || execution.installation_expires_at <= startedAt) {
+        throw new ServiceError(409, "guard_installation_inactive", "Guard installation is inactive before settlement");
+      }
+      if (execution.policy_revoked_at !== null || execution.policy_expires_at <= startedAt) {
+        throw new ServiceError(409, "guard_policy_inactive", "Guard policy is inactive before settlement");
+      }
+      if (execution.payment_settled_at !== null) throw new ServiceError(409, "guard_payment_already_settled", "Guard authorization payment is already settled");
+      if (execution.settlement_started_at !== null) throw new ServiceError(409, "guard_settlement_in_progress", "A Guard settlement is already in progress");
+      if (
+        execution.settlement_payment_hash !== null
+        && (execution.settlement_payment_hash !== paymentSha256 || execution.settlement_payment_identity_hash !== paymentIdentitySha256)
+      ) {
+        throw new ServiceError(409, "guard_payment_binding_changed", "Guard execution is already bound to a different payment authorization");
+      }
+      const reusedIdentity = this.db.prepare(`
+        SELECT id FROM guard_executions
+        WHERE settlement_payment_identity_hash = ? AND id <> ?
+      `).get(paymentIdentitySha256, execution.id);
+      if (reusedIdentity) throw new ServiceError(409, "guard_payment_identity_reused", "EIP-3009 payment authorization is already bound to another Guard execution");
+      this.db.prepare(`
+        UPDATE guard_executions SET settlement_started_at = ?, settlement_claim_id = ?,
+          settlement_payment_hash = ?, settlement_payment_identity_hash = ?
+        WHERE id = ? AND settlement_started_at IS NULL AND payment_settled_at IS NULL
+      `).run(startedAt, settlementClaimId, paymentSha256, paymentIdentitySha256, execution.id);
+      const started = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(execution.id);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(started) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  cancelGuardExecutionSettlement({ installationId, idempotencyKey, callHash, settlementClaimId, canceledAt = Date.now() }) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(idempotencyKey, "idempotencyKey");
+    requireSha256(callHash, "callHash");
+    requireNonEmptyString(settlementClaimId, "settlementClaimId");
+    requireMillis(canceledAt, "canceledAt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const execution = this.db.prepare(`
+        SELECT * FROM guard_executions WHERE installation_id = ? AND idempotency_key = ?
+      `).get(installationId, idempotencyKey);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist for settlement cancellation");
+      if (execution.call_hash !== callHash) throw new ServiceError(409, "idempotency_conflict", "Settlement cancellation does not match the stored call hash");
+      if (execution.settlement_claim_id !== null && execution.settlement_claim_id !== settlementClaimId) {
+        throw new ServiceError(409, "guard_settlement_claim_mismatch", "Settlement cancellation does not own the active claim");
+      }
+      if (execution.payment_settled_at !== null || execution.settlement_started_at === null) {
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(execution) };
+      }
+      this.db.prepare(`
+        UPDATE guard_executions SET settlement_started_at = NULL, settlement_claim_id = NULL
+        WHERE id = ? AND payment_settled_at IS NULL
+      `).run(execution.id);
+      const binding = this.db.prepare(`
+        SELECT i.revoked_at AS installation_revoked_at, p.revoked_at AS policy_revoked_at
+        FROM guard_installations i JOIN guard_policy_versions p ON p.policy_hash = i.policy_hash
+        WHERE i.id = ? AND p.policy_hash = ?
+      `).get(execution.installation_id, execution.policy_hash);
+      if (binding && (binding.installation_revoked_at !== null || binding.policy_revoked_at !== null)) {
+        const transitioned = this.#transitionGuardExecutionReservations(execution, "released", canceledAt);
+        this.db.prepare(`
+          UPDATE guard_executions SET revoked_at = ?, spend_disposition = ?
+          WHERE id = ? AND committed_at IS NULL AND completed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+        `).run(canceledAt, transitioned.count > 0 ? "released" : "none", execution.id);
+      }
+      const canceled = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(execution.id);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(canceled) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  markGuardExecutionPaymentSettled({
+    installationId,
+    idempotencyKey,
+    callHash,
+    settlementClaimId,
+    paymentSha256,
+    paymentIdentitySha256,
+    settledAt = Date.now(),
+    transaction = null,
+  }) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(idempotencyKey, "idempotencyKey");
+    requireSha256(callHash, "callHash");
+    requireNonEmptyString(settlementClaimId, "settlementClaimId");
+    requireSha256(paymentSha256, "paymentSha256");
+    requireSha256(paymentIdentitySha256, "paymentIdentitySha256");
+    requireMillis(settledAt, "settledAt");
+    if (transaction !== null && (typeof transaction !== "string" || transaction.length < 1 || transaction.length > 512)) {
+      throw new ServiceError(400, "invalid_guard_record", "transaction must be null or a bounded settlement identifier");
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const execution = this.db.prepare(`
+        SELECT * FROM guard_executions WHERE installation_id = ? AND idempotency_key = ?
+      `).get(installationId, idempotencyKey);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist for the settled request");
+      if (execution.call_hash !== callHash) throw new ServiceError(409, "idempotency_conflict", "Settled request does not match the stored call hash");
+      if (execution.settlement_started_at === null) throw new ServiceError(409, "guard_settlement_not_started", "Guard settlement must be claimed before it can be marked successful");
+      if (execution.settlement_claim_id !== settlementClaimId) throw new ServiceError(409, "guard_settlement_claim_mismatch", "Settled request does not own the active claim");
+      if (execution.settlement_payment_hash !== paymentSha256 || execution.settlement_payment_identity_hash !== paymentIdentitySha256) {
+        throw new ServiceError(409, "guard_payment_proof_mismatch", "Settled payment proof does not match the claimed payment authorization");
+      }
+      if (execution.payment_settled_at !== null) {
+        if (transaction !== null && execution.payment_transaction !== transaction) {
+          throw new ServiceError(409, "guard_payment_transaction_mismatch", "Guard execution is already bound to a different payment transaction");
+        }
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(execution) };
+      }
+      const reusedTransaction = transaction === null ? undefined : this.db.prepare(`
+        SELECT id FROM guard_executions WHERE payment_transaction = ? AND id <> ?
+      `).get(transaction, execution.id);
+      if (reusedTransaction) throw new ServiceError(409, "guard_payment_transaction_reused", "Payment transaction is already bound to another Guard execution");
+      this.db.prepare(`
+        UPDATE guard_executions SET payment_settled_at = ?, payment_transaction = ?
+        WHERE id = ? AND payment_settled_at IS NULL
+      `).run(settledAt, transaction, execution.id);
+      const settled = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(execution.id);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(settled) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getGuardSpendPeriod(installationId, reservationKey) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(reservationKey, "reservationKey");
+    return this.db.prepare(`
+      SELECT * FROM guard_spend_periods WHERE reservation_key = ?
+    `).get(reservationKey);
+  }
+
+  sweepExpiredGuardReservations(installationId, reservationKey, now = Date.now()) {
+    requireNonEmptyString(installationId, "installationId");
+    requireNonEmptyString(reservationKey, "reservationKey");
+    requireMillis(now, "now");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const released = this.#releaseExpiredGuardReservations(reservationKey, now);
+      this.db.exec("COMMIT");
+      return released;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  commitGuardExecution({ executionId, committedAt = Date.now(), paymentReconciliation } = {}) {
+    requireNonEmptyString(executionId, "executionId");
+    requireMillis(committedAt, "committedAt");
+    if (paymentReconciliation !== undefined) {
+      if (!paymentReconciliation || typeof paymentReconciliation !== "object" || Array.isArray(paymentReconciliation)) {
+        throw new ServiceError(400, "invalid_guard_record", "paymentReconciliation must be an object");
+      }
+      requireSha256(paymentReconciliation.paymentSha256, "paymentReconciliation.paymentSha256");
+      requireSha256(paymentReconciliation.paymentIdentitySha256, "paymentReconciliation.paymentIdentitySha256");
+      requireMillis(paymentReconciliation.settledAt, "paymentReconciliation.settledAt");
+      if (typeof paymentReconciliation.transaction !== "string" || !/^0x[0-9a-f]{64}$/.test(paymentReconciliation.transaction)) {
+        throw new ServiceError(400, "invalid_guard_record", "paymentReconciliation.transaction must be a lowercase EVM transaction hash");
+      }
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      let execution = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist");
+      if (paymentReconciliation !== undefined) {
+        if (execution.settlement_started_at === null || execution.settlement_claim_id === null) {
+          throw new ServiceError(409, "guard_settlement_not_started", "Guard payment reconciliation requires an active settlement claim");
+        }
+        if (
+          execution.settlement_payment_hash !== paymentReconciliation.paymentSha256
+          || execution.settlement_payment_identity_hash !== paymentReconciliation.paymentIdentitySha256
+        ) {
+          throw new ServiceError(409, "guard_payment_proof_mismatch", "Reconciled payment proof does not match the claimed payment authorization");
+        }
+        if (execution.payment_settled_at !== null) {
+          if (execution.payment_transaction !== paymentReconciliation.transaction) {
+            throw new ServiceError(409, "guard_payment_transaction_mismatch", "Guard execution is already bound to a different payment transaction");
+          }
+        } else {
+          const reusedTransaction = this.db.prepare(`
+            SELECT id FROM guard_executions WHERE payment_transaction = ? AND id <> ?
+          `).get(paymentReconciliation.transaction, execution.id);
+          if (reusedTransaction) throw new ServiceError(409, "guard_payment_transaction_reused", "Payment transaction is already bound to another Guard execution");
+          this.db.prepare(`
+            UPDATE guard_executions SET payment_settled_at = ?, payment_transaction = ?
+            WHERE id = ? AND payment_settled_at IS NULL
+          `).run(paymentReconciliation.settledAt, paymentReconciliation.transaction, execution.id);
+          execution = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(execution.id);
+        }
+      }
+      if (execution.committed_at !== null) {
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(execution) };
+      }
+      if (execution.revoked_at !== null) throw new ServiceError(409, "guard_execution_revoked", "Guard execution is revoked");
+      if (execution.expired_at !== null) throw new ServiceError(409, "guard_execution_expired", "Guard execution authorization expired");
+      if (execution.status !== "authorized" || execution.decision !== "ALLOW") {
+        throw new ServiceError(409, "guard_execution_not_authorized", "Only an authorized ALLOW execution can be committed");
+      }
+      if (execution.payment_settled_at === null) {
+        throw new ServiceError(409, "guard_payment_not_settled", "Guard authorization payment must settle before forwarding can be committed");
+      }
+      if (committedAt < execution.created_at || committedAt >= execution.expires_at) {
+        throw new ServiceError(409, "guard_execution_expired", "Guard execution must be committed before its authorization expires");
+      }
+      const binding = this.db.prepare(`
+        SELECT i.expires_at AS installation_expires_at, i.revoked_at AS installation_revoked_at,
+               p.expires_at AS policy_expires_at, p.revoked_at AS policy_revoked_at
+        FROM guard_installations i
+        JOIN guard_policy_versions p ON p.policy_hash = i.policy_hash
+        WHERE i.id = ? AND p.policy_hash = ?
+      `).get(execution.installation_id, execution.policy_hash);
+      const installationClaimWon = binding?.installation_revoked_at !== null
+        && execution.settlement_started_at !== null
+        && binding.installation_revoked_at >= execution.settlement_started_at;
+      if (!binding || (binding.installation_revoked_at !== null && !installationClaimWon) || binding.installation_expires_at <= committedAt) {
+        throw new ServiceError(409, "guard_installation_inactive", "Guard installation was revoked or expired before commit");
+      }
+      const policyClaimWon = binding.policy_revoked_at !== null
+        && execution.settlement_started_at !== null
+        && binding.policy_revoked_at >= execution.settlement_started_at;
+      if ((binding.policy_revoked_at !== null && !policyClaimWon) || binding.policy_expires_at <= committedAt) {
+        throw new ServiceError(409, "guard_policy_inactive", "Guard policy was revoked or expired before commit");
+      }
+      const transitionedReservations = this.#transitionGuardExecutionReservations(execution, "committed", committedAt);
+      const hasReservation = transitionedReservations.count > 0;
+      this.db.prepare(`
+        UPDATE guard_executions SET committed_at = ?, spend_disposition = ?
+        WHERE id = ? AND committed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+      `).run(committedAt, hasReservation ? "committed" : "none", executionId);
+      const committed = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(committed) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  completeGuardExecution({
+    executionId,
+    completionReceiptJson,
+    outcomeStatus,
+    outcomeHash,
+    completedAt = Date.now(),
+  }) {
+    requireNonEmptyString(executionId, "executionId");
+    requireJsonObjectText(completionReceiptJson, "completionReceiptJson");
+    if (!new Set(["succeeded", "failed", "outcome_unknown"]).has(outcomeStatus)) {
+      throw new ServiceError(400, "invalid_guard_record", "outcomeStatus must be succeeded, failed, or outcome_unknown");
+    }
+    requireSha256(outcomeHash, "outcomeHash");
+    requireMillis(completedAt, "completedAt");
+
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const execution = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist");
+      if (execution.completed_at !== null) {
+        if (
+          execution.completion_receipt_json !== completionReceiptJson
+          || execution.outcome_status !== outcomeStatus
+          || execution.outcome_hash !== outcomeHash
+        ) throw new ServiceError(409, "guard_execution_finalized", "Guard execution was already completed differently");
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(execution) };
+      }
+      if (execution.committed_at === null) {
+        throw new ServiceError(409, "guard_execution_not_committed", "Guard execution must be committed before completion");
+      }
+      if (completedAt < execution.committed_at) {
+        throw new ServiceError(400, "invalid_guard_record", "completedAt must not precede committedAt");
+      }
+      this.db.prepare(`
+        UPDATE guard_executions
+        SET completion_receipt_json = ?, outcome_status = ?, outcome_hash = ?, completed_at = ?
+        WHERE id = ? AND committed_at IS NOT NULL AND completed_at IS NULL
+      `).run(completionReceiptJson, outcomeStatus, outcomeHash, completedAt, executionId);
+      const completed = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(completed) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  revokeGuardExecution(executionId, revokedAt = Date.now()) {
+    requireNonEmptyString(executionId, "executionId");
+    requireMillis(revokedAt, "revokedAt");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const execution = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      if (!execution) throw new ServiceError(404, "guard_execution_not_found", "Guard execution does not exist");
+      if (execution.completed_at !== null) throw new ServiceError(409, "guard_execution_finalized", "Completed execution cannot be revoked");
+      if (execution.committed_at !== null) throw new ServiceError(409, "guard_execution_committed", "Committed execution cannot be revoked");
+      if (execution.expired_at !== null) throw new ServiceError(409, "guard_execution_expired", "Expired execution cannot be revoked");
+      if (execution.revoked_at !== null) {
+        this.db.exec("COMMIT");
+        return { replay: true, execution: guardExecutionRow(execution) };
+      }
+      if (revokedAt < execution.created_at) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede createdAt");
+      if (execution.settlement_started_at !== null && execution.expires_at > revokedAt) {
+        throw new ServiceError(409, "guard_settlement_in_progress", "Guard settlement or paid authorization is still within its commit window");
+      }
+      const transitionedReservations = this.#transitionGuardExecutionReservations(execution, "released", revokedAt);
+      const hasReservation = transitionedReservations.count > 0;
+      this.db.prepare(`
+        UPDATE guard_executions SET revoked_at = ?, spend_disposition = ?
+        WHERE id = ? AND committed_at IS NULL AND completed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+      `).run(revokedAt, hasReservation ? "released" : "none", executionId);
+      const revoked = this.db.prepare("SELECT * FROM guard_executions WHERE id = ?").get(executionId);
+      this.db.exec("COMMIT");
+      return { replay: false, execution: guardExecutionRow(revoked) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  #releaseExpiredGuardReservations(reservationKey, now) {
+    const expired = this.db.prepare(`
+      SELECT DISTINCT e.*
+      FROM guard_executions e
+      JOIN guard_execution_reservations r ON r.execution_id = e.id
+      WHERE r.reservation_key = ? AND r.disposition = 'reserved'
+        AND e.committed_at IS NULL AND e.completed_at IS NULL AND e.expired_at IS NULL AND e.revoked_at IS NULL
+        AND e.expires_at <= ?
+      ORDER BY e.id
+    `).all(reservationKey, now);
+    if (expired.length === 0) return { releasedExecutions: 0, releasedAtomic: "0" };
+    let releasedForKey = 0n;
+    for (const execution of expired) {
+      const transitioned = this.#transitionGuardExecutionReservations(execution, "released", now);
+      releasedForKey += BigInt(transitioned.amounts.get(reservationKey) ?? "0");
+      const changed = this.db.prepare(`
+        UPDATE guard_executions SET expired_at = ?, spend_disposition = ?
+        WHERE id = ? AND committed_at IS NULL AND completed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+      `).run(now, transitioned.count > 0 ? "released" : "none", execution.id).changes;
+      if (changed !== 1) {
+        throw new ServiceError(500, "guard_reservation_corrupt", "Expired reservation release did not update every execution exactly once");
+      }
+    }
+    return { releasedExecutions: expired.length, releasedAtomic: releasedForKey.toString() };
+  }
+
+  #revokePendingGuardExecutions(whereSql, params, revokedAt) {
+    const pending = this.db.prepare(`
+      SELECT * FROM guard_executions
+      WHERE ${whereSql}
+        AND committed_at IS NULL AND completed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+      ORDER BY id
+    `).all(...params);
+    for (const execution of pending) {
+      if (revokedAt < execution.created_at) throw new ServiceError(400, "invalid_guard_record", "revokedAt must not precede a pending execution");
+      if (execution.settlement_started_at !== null && execution.expires_at > revokedAt) continue;
+      const transitioned = this.#transitionGuardExecutionReservations(execution, "released", revokedAt);
+      const hasReservation = transitioned.count > 0;
+      const changed = this.db.prepare(`
+        UPDATE guard_executions SET revoked_at = ?, spend_disposition = ?
+        WHERE id = ? AND committed_at IS NULL AND completed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
+      `).run(revokedAt, hasReservation ? "released" : "none", execution.id).changes;
+      if (changed !== 1) throw new ServiceError(409, "guard_execution_finalized", "Pending execution changed during parent revocation");
+    }
+    return pending.length;
+  }
+
+  #transitionGuardExecutionReservations(execution, disposition, at) {
+    const reservations = this.db.prepare(`
+      SELECT * FROM guard_execution_reservations
+      WHERE execution_id = ? AND disposition = 'reserved'
+      ORDER BY reservation_key
+    `).all(execution.id);
+    if (execution.reservation_key !== null && reservations.length === 0) {
+      throw new ServiceError(500, "guard_reservation_corrupt", "Guard execution reservation rows are missing");
+    }
+    const amounts = new Map();
+    for (const reservation of reservations) {
+      const period = this.db.prepare(`
+        SELECT * FROM guard_spend_periods WHERE reservation_key = ?
+      `).get(reservation.reservation_key);
+      const amount = BigInt(reservation.amount_atomic);
+      if (!period || BigInt(period.reserved_atomic) < amount) {
+        throw new ServiceError(500, "guard_reservation_corrupt", "Authoritative spend reservation is missing or inconsistent");
+      }
+      const nextReserved = BigInt(period.reserved_atomic) - amount;
+      const nextSpent = disposition === "committed" ? BigInt(period.spent_atomic) + amount : BigInt(period.spent_atomic);
+      this.db.prepare(`
+        UPDATE guard_spend_periods SET reserved_atomic = ?, spent_atomic = ?, updated_at = ?
+        WHERE reservation_key = ?
+      `).run(nextReserved.toString(), nextSpent.toString(), at, reservation.reservation_key);
+      const changed = this.db.prepare(`
+        UPDATE guard_execution_reservations SET disposition = ?
+        WHERE execution_id = ? AND reservation_key = ? AND disposition = 'reserved'
+      `).run(disposition, execution.id, reservation.reservation_key).changes;
+      if (changed !== 1) throw new ServiceError(500, "guard_reservation_corrupt", "Guard execution reservation changed unexpectedly");
+      amounts.set(reservation.reservation_key, reservation.amount_atomic);
+    }
+    return { count: reservations.length, amounts };
   }
 }
 

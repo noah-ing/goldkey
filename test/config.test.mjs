@@ -75,3 +75,92 @@ test("production Postgres requires transport encryption", () => {
     /must require TLS/,
   );
 });
+
+test("Guard is disabled by default and exposes fixed premium prices", () => {
+  const config = loadConfig(production);
+  assert.equal(config.guardEnabled, false);
+  assert.equal(config.guardNetworkPriceUsd, "0.05");
+  assert.equal(config.guardEvmPriceUsd, "0.10");
+  assert.equal(config.guardAuthorizationTtlMs, 60_000);
+});
+
+test("production Guard fails closed without a receipt signing key pair", () => {
+  assert.throws(
+    () => loadConfig({ ...production, guardEnabled: true, x402Enabled: true }),
+    /GUARD_RECEIPT_KEY_ID must be explicitly configured/,
+  );
+  assert.throws(
+    () => loadConfig({ ...production, guardEnabled: true, x402Enabled: true, guardReceiptKeyId: "guard-2026-01" }),
+    /GUARD_RECEIPT_PRIVATE_KEY must be explicitly configured/,
+  );
+  const config = loadConfig({
+    ...production,
+    guardEnabled: true,
+    x402Enabled: true,
+    x402AuthHeaders: { authorization: "test-only" },
+    guardReceiptKeyId: "guard-2026-01",
+    guardReceiptPrivateKey: "test-pkcs8-base64",
+    guardAllowedOperatorWallets: ["0x0000000000000000000000000000000000000004"],
+  });
+  assert.equal(config.guardEnabled, true);
+  assert.equal(config.guardReceiptKeyId, "guard-2026-01");
+  assert.deepEqual(config.guardAllowedOperatorWallets, ["0x0000000000000000000000000000000000000004"]);
+});
+
+test("Guard beta requires a bounded unique operator allowlist", () => {
+  assert.throws(
+    () => loadConfig({
+      ...production,
+      guardEnabled: true,
+      x402Enabled: true,
+      x402AuthHeaders: { authorization: "test-only" },
+      guardReceiptKeyId: "guard-2026-01",
+      guardReceiptPrivateKey: "test-pkcs8-base64",
+    }),
+    /GUARD_ALLOWED_OPERATOR_WALLETS/,
+  );
+  assert.throws(
+    () => loadConfig({
+      ...production,
+      guardEnabled: true,
+      x402Enabled: true,
+      guardAllowedOperatorWallets: ["0x0000000000000000000000000000000000000004", "0x0000000000000000000000000000000000000004"],
+      x402AuthHeaders: { authorization: "test-only" },
+      guardReceiptKeyId: "guard-2026-01",
+      guardReceiptPrivateKey: "test-pkcs8-base64",
+    }),
+    /duplicates/,
+  );
+});
+
+test("Guard signing key settings must be paired and single-line", () => {
+  assert.throws(
+    () => loadConfig({ ...production, guardReceiptPrivateKey: "test-pkcs8-base64" }),
+    /must be set together/,
+  );
+  assert.throws(
+    () => loadConfig({ ...production, guardReceiptKeyId: "bad\nkey", guardReceiptPrivateKey: "test" }),
+    /single-line/,
+  );
+});
+
+test("Guard receipt rotation accepts public verification keys and rejects private JWK material", () => {
+  const previous = { kty: "OKP", crv: "Ed25519", x: "A".repeat(43), kid: "guard-old", use: "sig", alg: "EdDSA", key_ops: ["verify"] };
+  const config = loadConfig({ ...production, guardReceiptPreviousPublicKeys: [previous] });
+  assert.deepEqual(config.guardReceiptPreviousPublicKeys, [previous]);
+  assert.throws(
+    () => loadConfig({ ...production, guardReceiptPreviousPublicKeys: [{ ...previous, d: "private" }] }),
+    /public-only JWKs/,
+  );
+  assert.throws(
+    () => loadConfig({ ...production, guardReceiptPreviousPublicKeys: "not-json" }),
+    /must be valid JSON/,
+  );
+});
+
+test("Guard cannot be enabled without paid x402 authorization", () => {
+  assert.throws(
+    () => loadConfig({ ...production, guardEnabled: true, x402Enabled: false }),
+    /requires X402_ENABLED/,
+  );
+});

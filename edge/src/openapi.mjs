@@ -265,6 +265,268 @@ function authVerifyRequestSchema() {
   };
 }
 
+const guardId = { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" };
+const guardInstallationId = { type: "string", pattern: "^gki_[A-Za-z0-9_-]{43}$" };
+const guardHash = { type: "string", pattern: "^[0-9a-f]{64}$" };
+const guardAtomic = { type: "string", pattern: "^(0|[1-9][0-9]{0,77})$" };
+const guardAddress = { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" };
+const guardEdSignature = { type: "string", pattern: "^[A-Za-z0-9_-]{86}$" };
+
+function guardRequestSchema(kinds) {
+  const calls = [];
+  if (kinds.includes("mcp_tool")) calls.push({
+    type: "object", additionalProperties: false,
+    required: ["kind", "connector_id", "tool", "input_schema_sha256", "arguments"],
+    properties: { kind: { const: "mcp_tool" }, connector_id: guardId, tool: { type: "string", maxLength: 256 }, input_schema_sha256: guardHash, arguments: {} },
+  });
+  if (kinds.includes("https")) calls.push({
+    type: "object", additionalProperties: false,
+    required: ["kind", "connector_id", "operation_id"],
+    properties: { kind: { const: "https" }, connector_id: guardId, operation_id: guardId, query: { type: "object" }, body: {} },
+  });
+  if (kinds.includes("evm_transaction")) calls.push({
+    type: "object", additionalProperties: false,
+    required: ["kind", "connector_id", "transaction"],
+    properties: {
+      kind: { const: "evm_transaction" }, connector_id: guardId,
+      transaction: {
+        type: "object", additionalProperties: false,
+        required: [
+          "chain_id", "from", "value_atomic", "data", "nonce", "gas_limit",
+          "max_fee_per_gas_atomic", "max_priority_fee_per_gas_atomic",
+        ],
+        properties: {
+          chain_id: { type: "integer", minimum: 1 },
+          from: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+          to: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+          value_atomic: guardAtomic,
+          data: { type: "string", pattern: "^0x(?:[0-9a-fA-F]{2})*$" },
+          nonce: guardAtomic,
+          gas_limit: guardAtomic,
+          max_fee_per_gas_atomic: guardAtomic,
+          max_priority_fee_per_gas_atomic: guardAtomic,
+          type: { const: "eip1559" },
+          access_list: { type: "array", maxItems: 0 },
+        },
+      },
+    },
+  });
+  return {
+    type: "object", additionalProperties: false,
+    required: ["schema", "installation_id", "idempotency_key", "issued_at", "call", "signature"],
+    properties: {
+      schema: { const: "goldkey.guard-request.v1" },
+      installation_id: guardInstallationId,
+      idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{8,128}$" },
+      issued_at: { type: "string", format: "date-time" },
+      call: { oneOf: calls },
+      signature: guardEdSignature,
+    },
+  };
+}
+
+function guardPolicySchema() {
+  const addressList = { type: "array", maxItems: 100, uniqueItems: true, items: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" } };
+  const connector = {
+    oneOf: [
+      {
+        type: "object", additionalProperties: false, required: ["id", "kind", "server_id", "tools"],
+        properties: {
+          id: guardId, kind: { const: "mcp_tool" }, server_id: guardId,
+          tools: { type: "array", minItems: 1, maxItems: 100, items: {
+            type: "object", additionalProperties: false, required: ["name", "effect", "input_schema_sha256"],
+            properties: { name: { type: "string", maxLength: 256 }, effect: { enum: ["read", "write", "network", "payment", "execute"] }, input_schema_sha256: guardHash, arguments_schema: { type: "object" } },
+          } },
+        },
+      },
+      {
+        type: "object", additionalProperties: false, required: ["id", "kind", "origin", "operations"],
+        properties: {
+          id: guardId, kind: { const: "https" }, origin: { type: "string", format: "uri", pattern: "^https://" },
+          operations: { type: "array", minItems: 1, maxItems: 100, items: {
+            type: "object", additionalProperties: false, required: ["id", "method", "path", "effect"],
+            properties: { id: guardId, method: { enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] }, path: { type: "string", pattern: "^/" }, effect: { enum: ["read", "write", "network", "payment", "execute"] }, query_schema: { type: "object" }, body_schema: { type: "object" } },
+          } },
+        },
+      },
+      {
+        type: "object", additionalProperties: false,
+        required: ["id", "kind", "chain_id", "from", "allowed_native_recipients", "allowed_erc20_tokens", "allowed_erc20_recipients", "allowed_approval_spenders", "max_native_value_atomic", "max_erc20_transfer_atomic", "max_erc20_approval_atomic", "max_gas_limit", "max_fee_per_gas_atomic", "max_priority_fee_per_gas_atomic", "max_total_fee_atomic", "fee_period_seconds", "max_fee_period_atomic", "spend_period_seconds", "max_period_atomic", "require_simulation"],
+        properties: {
+          id: guardId, kind: { const: "evm_transaction" }, chain_id: { type: "integer", minimum: 1 }, from: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+          allowed_native_recipients: addressList, allowed_erc20_tokens: addressList, allowed_erc20_recipients: addressList, allowed_approval_spenders: addressList,
+          max_native_value_atomic: guardAtomic, max_erc20_transfer_atomic: guardAtomic, max_erc20_approval_atomic: guardAtomic, max_gas_limit: guardAtomic,
+          max_fee_per_gas_atomic: guardAtomic, max_priority_fee_per_gas_atomic: guardAtomic,
+          max_total_fee_atomic: { ...guardAtomic, description: "Point-in-time screening threshold for execution maximum plus Base L1-data and operator-fee estimates; not an absolute protocol fee guarantee." },
+          fee_period_seconds: { type: "integer", minimum: 60, maximum: 31_536_000 },
+          max_fee_period_atomic: { ...guardAtomic, description: "Cumulative reservation threshold based on point-in-time fee estimates." },
+          spend_period_seconds: { type: "integer", minimum: 60, maximum: 31_536_000 }, max_period_atomic: guardAtomic,
+          require_simulation: { const: true }, asset_id: { type: "string" },
+        },
+      },
+    ],
+  };
+  return {
+    type: "object", additionalProperties: false,
+    required: ["schema", "policy_id", "version", "operator_wallet", "audience", "issued_at", "expires_at", "connectors", "signature"],
+    properties: {
+      schema: { const: "goldkey.guard-policy.v1" }, policy_id: guardId,
+      version: { type: "integer", minimum: 1 },
+      operator_wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      audience: { type: "string", format: "uri" },
+      issued_at: { type: "string", format: "date-time" }, expires_at: { type: "string", format: "date-time" },
+      connectors: { type: "array", minItems: 1, maxItems: 64, items: connector },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+    },
+  };
+}
+
+function guardInstallationSchema() {
+  return {
+    type: "object", additionalProperties: false,
+    required: ["schema", "installation_id", "operator_wallet", "policy_sha256", "public_key_jwk", "issued_at", "expires_at", "signature", "key_proof"],
+    properties: {
+      schema: { const: "goldkey.guard-installation.v1" }, installation_id: guardInstallationId,
+      operator_wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" }, policy_sha256: guardHash,
+      public_key_jwk: {
+        type: "object", additionalProperties: false, required: ["kty", "crv", "x"],
+        properties: { kty: { const: "OKP" }, crv: { const: "Ed25519" }, x: { type: "string", pattern: "^[A-Za-z0-9_-]{43}$" } },
+      },
+      issued_at: { type: "string", format: "date-time" }, expires_at: { type: "string", format: "date-time" },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+      key_proof: { type: "string", pattern: "^[A-Za-z0-9_-]{86}$", description: "Ed25519 proof of possession by the installation private key over the canonical binding." },
+    },
+  };
+}
+
+function guardRevocationSchema() {
+  return {
+    type: "object", additionalProperties: false,
+    required: ["schema", "target_kind", "target_id", "operator_wallet", "audience", "issued_at", "signature"],
+    properties: {
+      schema: { const: "goldkey.guard-revocation.v1" },
+      target_kind: { enum: ["policy", "installation"] },
+      target_id: { type: "string" },
+      operator_wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      audience: { type: "string", format: "uri", description: "Exact GoldKey HTTPS origin" },
+      issued_at: { type: "string", format: "date-time" },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+    },
+    allOf: [
+      { if: { properties: { target_kind: { const: "policy" } } }, then: { properties: { target_id: guardHash } } },
+      { if: { properties: { target_kind: { const: "installation" } } }, then: { properties: { target_id: guardInstallationId } } },
+    ],
+  };
+}
+
+function guardLifecycleSchema(completion) {
+  return {
+    type: "object", additionalProperties: false,
+    required: ["schema", "installation_id", "execution_id", "receipt_id", "receipt_sha256", "call_sha256", "issued_at", ...(completion ? ["outcome_status", "outcome_sha256"] : []), "signature"],
+    properties: {
+      schema: { const: completion ? "goldkey.guard-completion.v1" : "goldkey.guard-commit.v1" },
+      installation_id: guardInstallationId, execution_id: guardId, receipt_id: guardId,
+      receipt_sha256: guardHash, call_sha256: guardHash, issued_at: { type: "string", format: "date-time" },
+      ...(completion ? { outcome_status: { enum: ["succeeded", "failed", "outcome_unknown"] }, outcome_sha256: guardHash } : {}),
+      signature: guardEdSignature,
+    },
+  };
+}
+
+function guardReconciledCommitSchema() {
+  return {
+    type: "object", additionalProperties: false, required: ["schema", "commit", "payment_proof"],
+    properties: {
+      schema: { const: "goldkey.guard-reconciled-commit.v1" },
+      commit: { $ref: "#/components/schemas/GuardCommit" },
+      payment_proof: {
+        type: "object", additionalProperties: false, required: ["transaction", "payment_payload"],
+        properties: {
+          transaction: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+          payment_payload: {
+            type: "object", additionalProperties: false, required: ["x402Version", "resource", "accepted", "payload"],
+            properties: {
+              x402Version: { const: 2 },
+              resource: {
+                type: "object", additionalProperties: false, required: ["url"],
+                properties: { url: { type: "string", format: "uri" }, description: { type: "string" }, mimeType: { type: "string" }, serviceName: { type: "string" }, tags: { type: "array", items: { type: "string" } }, iconUrl: { type: "string", format: "uri" } },
+              },
+              accepted: {
+                type: "object", additionalProperties: false,
+                required: ["scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds", "extra"],
+                properties: { scheme: { const: "exact" }, network: { const: "eip155:8453" }, amount: guardAtomic, asset: guardAddress, payTo: guardAddress, maxTimeoutSeconds: { const: 30 }, extra: { type: "object", additionalProperties: false, required: ["name", "version"], properties: { name: { const: "USD Coin" }, version: { const: "2" } } } },
+              },
+              payload: {
+                type: "object", additionalProperties: false, required: ["authorization", "signature"],
+                properties: {
+                  authorization: { type: "object", additionalProperties: false, required: ["from", "to", "value", "validAfter", "validBefore", "nonce"], properties: { from: guardAddress, to: guardAddress, value: guardAtomic, validAfter: guardAtomic, validBefore: guardAtomic, nonce: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" } } },
+                  signature: { type: "string", pattern: "^0x[0-9a-fA-F]{130}$" },
+                },
+              },
+              extensions: { type: "object" },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function guardPaths() {
+  const paid = (operationId, amount, requestRef, description) => ({
+    post: {
+      tags: ["guard-beta", "origin"], operationId, summary: `$${amount} GoldKey Guard beta authorization`,
+      "x-beta": true,
+      "x-payment-info": { price: { mode: "fixed", currency: "USD", amount }, protocols: [{ x402: {} }] },
+      ...proxied(description, {
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: requestRef } } } },
+        responses: {
+          200: { description: "Settled signed ALLOW, REVIEW, or BLOCK receipt; an exact unexpired replay is returned without another payment" },
+          400: { description: "Malformed request rejected before payment or failed post-verification evaluation" },
+          401: { description: "Invalid installation signature rejected before payment" },
+          402: { description: "Payment Required" },
+          502: { description: "Origin unavailable" },
+          503: { description: "Guard or required simulation unavailable" },
+        },
+      }),
+    },
+  });
+  return {
+    "/guard/terms": {
+      get: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_terms", "x-beta": true, ...proxied("Return the separate GoldKey Guard beta terms. Guard is not included in the immutable utility-pass terms.", { responses: { 200: { description: "Guard terms", content: { "text/markdown": {} } }, 502: { description: "Origin unavailable" } } }) },
+    },
+    "/.well-known/goldkey-guard-keys.json": {
+      get: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_receipt_keyset", "x-beta": true, ...proxied("Return public Ed25519 keys for offline verification of signed Guard receipts.", { responses: { 200: { description: "Public verification keyset" }, 502: { description: "Origin unavailable" } } }) },
+    },
+    "/v1/guard/policies": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_register_policy", "x-beta": true, ...proxied("Register an operator-signed immutable, monotonically versioned Guard policy. This is a free setup operation, not a pass entitlement.", { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardPolicy" } } } }, responses: { 201: { description: "Policy registered" }, 200: { description: "Exact replay" }, 401: { description: "Invalid operator signature" }, 429: { description: "Registration rate limited" } } }) },
+    },
+    "/v1/guard/installations": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_register_installation", "x-beta": true, ...proxied("Bind one public-only Ed25519 installation identity to the latest operator-signed policy. The private key remains local.", { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardInstallation" } } } }, responses: { 201: { description: "Installation registered" }, 200: { description: "Exact replay" }, 401: { description: "Invalid operator signature" }, 429: { description: "Registration rate limited" } } }) },
+    },
+    "/v1/guard/revocations": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_revoke", "x-beta": true, ...proxied("Submit an operator-signed revocation for a policy hash or installation identity. Revocation prevents new authorizations and is a free control-plane operation.", { requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardRevocation" } } } }, responses: { 200: { description: "Target revoked or exact replay" }, 400: { description: "Malformed revocation" }, 401: { description: "Invalid operator signature" }, 409: { description: "Revocation conflicts with the registered operator or target" }, 429: { description: "Registration rate limited" } } }) },
+    },
+    "/v1/guard/paygo/authorize/network": paid(
+      "goldkey_guard_authorize_network", "0.05", "#/components/schemas/GuardNetworkRequest",
+      "Beta hosted authorization for one exact MCP or HTTPS call. GoldKey verifies operator-controlled policy and returns a short-lived signed decision after settlement. ALLOW, REVIEW, and BLOCK are billable. GoldKey never receives the upstream credential and never forwards the call; only the operator's local enforcer may do so.",
+    ),
+    "/v1/guard/paygo/authorize/evm": paid(
+      "goldkey_guard_authorize_evm", "0.10", "#/components/schemas/GuardEvmRequest",
+      "Beta hosted authorization for one exact supported EVM transaction, including decoding and required simulation. ALLOW, REVIEW, and BLOCK are billable. GoldKey never holds the wallet signer and never signs or broadcasts; only the operator's local enforcer may do so.",
+    ),
+    "/v1/guard/executions/{executionId}/commit": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_commit_execution", "x-beta": true, ...proxied("Record the installation-signed FORWARDING transition after the local enforcer has durably persisted that state and before it invokes the real connector.", { parameters: [{ name: "executionId", in: "path", required: true, schema: guardId }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardCommit" } } } }, responses: { 200: { description: "Committed or exact replay" }, 409: { description: "Expired, mismatched, or finalized" } } }) },
+    },
+    "/v1/guard/executions/{executionId}/reconcile-commit": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_reconcile_paid_commit", "x-beta": true, ...proxied("Recovery-only installation-signed commit after a normal commit reports guard_payment_not_settled. The origin revalidates the exact public x402 payload and verifies the Base USDC transaction and Transfer before allowing FORWARDING; no private key is submitted.", { parameters: [{ name: "executionId", in: "path", required: true, schema: guardId }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardReconciledCommit" } } } }, responses: { 200: { description: "Payment reconciled and committed, or exact replay" }, 400: { description: "Malformed public payment proof" }, 409: { description: "Proof, claim, lifecycle, or identity mismatch" }, 503: { description: "Base payment proof unavailable" } } }) },
+    },
+    "/v1/guard/executions/{executionId}/complete": {
+      post: { tags: ["guard-beta", "origin"], operationId: "goldkey_guard_complete_execution", "x-beta": true, ...proxied("Record an installation-signed succeeded, failed, or outcome_unknown result. An ambiguous outcome must not be retried automatically.", { parameters: [{ name: "executionId", in: "path", required: true, schema: guardId }], requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardCompletion" } } } }, responses: { 200: { description: "Completed or exact replay" }, 409: { description: "Not committed or conflicting lifecycle evidence" } } }) },
+    },
+  };
+}
+
 function proxied(description, extras = {}) {
   return {
     description: `${description} This stateful route is forwarded to ORIGIN_API and may cold-start.`,
@@ -280,13 +542,14 @@ export function buildOpenApi(config) {
     info: {
       title: "GoldKey Agent Utility API",
       version: "1.0.0",
-      description: "Always-on edge discovery and Base-RPC-backed commerce for a 50-USDC transferable 10,000-call, 365-day utility pass. Stateful authentication, quota, credentials, and tool fulfillment may cold-start at the origin. The 500,000-USDC figure is only the fixed primary-mint gross cap, not a forecast or total-revenue cap.",
-      "x-guidance": "Use POST /v1/action-gate for one deterministic preflight decision across proposed action text, untrusted text, URL, payload schema, and spend mandate. Use POST /v1/paygo/execute for Action Gate or any of the six individual deterministic utilities. An unpaid request returns an x402 challenge for exactly 0.01 USDC on Base; pay and retry once. Use /v1/purchase/quote only to compare measured annual demand with the 50-USDC pass.",
+      description: `Always-on edge discovery and Base-RPC-backed commerce for a 50-USDC transferable 10,000-call, 365-day utility pass. Stateful authentication, quota, credentials, and tool fulfillment may cold-start at the origin. The 500,000-USDC figure is only the fixed primary-mint gross cap, not a forecast or total-revenue cap.${config.guardEnabled ? " This deployment advertises the feature-gated GoldKey Guard beta; the hosted authorizer never forwards calls, and real enforcement requires the separate customer-controlled local enforcer to be the only execution path." : ""}`,
+      "x-guidance": `Use POST /v1/action-gate for one deterministic preflight decision across proposed action text, untrusted text, URL, payload schema, and spend mandate. Use POST /v1/paygo/execute for Action Gate or any of the six individual deterministic utilities. An unpaid request returns an x402 challenge for exactly 0.01 USDC on Base; pay and retry once. Use /v1/purchase/quote only to compare measured annual demand with the 50-USDC pass.${config.guardEnabled ? " Guard is a separate premium beta, not included in the pass: use the local enforcer with /v1/guard/paygo/authorize/network at 0.05 USDC or /v1/guard/paygo/authorize/evm at 0.10 USDC. Do not give the guarded agent a credential, signer, or network bypass around that local enforcer." : ""}`,
     },
     servers: [{ url: config.publicOrigin }],
     tags: [
       { name: "edge", description: "Served by the Worker without contacting ORIGIN_API." },
       { name: "origin", description: "Allowlisted routes forwarded to ORIGIN_API." },
+      ...(config.guardEnabled ? [{ name: "guard-beta", description: "Feature-gated beta authorization control plane. The hosted service signs decisions; a separate operator-controlled local enforcer performs any authorized call." }] : []),
     ],
     paths: {
       "/healthz": {
@@ -402,6 +665,7 @@ export function buildOpenApi(config) {
           }),
         },
       },
+      ...(config.guardEnabled ? guardPaths() : {}),
     },
     components: {
       securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
@@ -414,6 +678,16 @@ export function buildOpenApi(config) {
         ActionGateInput: ACTION_GATE_INPUT_SCHEMA,
         ActionGateResponse: actionGateResponseSchema(),
         PaygoResponse: paygoResponseSchema(),
+        ...(config.guardEnabled ? {
+          GuardPolicy: guardPolicySchema(),
+          GuardInstallation: guardInstallationSchema(),
+          GuardRevocation: guardRevocationSchema(),
+          GuardNetworkRequest: guardRequestSchema(["mcp_tool", "https"]),
+          GuardEvmRequest: guardRequestSchema(["evm_transaction"]),
+          GuardCommit: guardLifecycleSchema(false),
+          GuardReconciledCommit: guardReconciledCommitSchema(),
+          GuardCompletion: guardLifecycleSchema(true),
+        } : {}),
       },
     },
   };
