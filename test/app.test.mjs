@@ -146,6 +146,11 @@ test("x402 discovery probes reach the challenge while malformed paid requests fa
   assert.ok(probe.headers.get("payment-required"));
   assert.equal(challenges, 1);
 
+  const bodylessProbe = await fetch(`${base}/v1/paygo/execute`, { method: "POST" });
+  assert.equal(bodylessProbe.status, 402);
+  assert.ok(bodylessProbe.headers.get("payment-required"));
+  assert.equal(challenges, 2);
+
   for (const paymentHeader of ["payment-signature", "x-payment"]) {
     const malformedPaid = await json(await fetch(`${base}/v1/paygo/execute`, {
       method: "POST",
@@ -156,7 +161,18 @@ test("x402 discovery probes reach the challenge while malformed paid requests fa
     assert.equal(malformedPaid.body.error.code, "unknown_tool");
     assert.equal(malformedPaid.response.headers.get("payment-required"), null);
   }
-  assert.equal(challenges, 1);
+  assert.equal(challenges, 2);
+
+  for (const paymentHeader of ["payment-signature", "x-payment"]) {
+    const malformedPaid = await json(await fetch(`${base}/v1/paygo/execute`, {
+      method: "POST",
+      headers: { [paymentHeader]: "invalid-payment" },
+    }));
+    assert.equal(malformedPaid.response.status, 400);
+    assert.equal(malformedPaid.body.error.code, "invalid_input");
+    assert.equal(malformedPaid.response.headers.get("payment-required"), null);
+  }
+  assert.equal(challenges, 2);
 
   const unknown = await json(await fetch(`${base}/v1/paygo/execute`, {
     method: "POST",
@@ -165,7 +181,7 @@ test("x402 discovery probes reach the challenge while malformed paid requests fa
   }));
   assert.equal(unknown.response.status, 404);
   assert.equal(unknown.body.error.code, "unknown_tool");
-  assert.equal(challenges, 1);
+  assert.equal(challenges, 2);
 
   const validUnpaid = await fetch(`${base}/v1/paygo/execute`, {
     method: "POST",
@@ -173,7 +189,7 @@ test("x402 discovery probes reach the challenge while malformed paid requests fa
     body: JSON.stringify({ tool: "json.canonicalize", input: { value: 1 } }),
   });
   assert.equal(validUnpaid.status, 402);
-  assert.equal(challenges, 2);
+  assert.equal(challenges, 3);
 });
 
 test("terms, schema, and renewal quotes are machine-readable", async (t) => {

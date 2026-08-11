@@ -39,11 +39,13 @@ function tokenImage(tokenId) {
 }
 
 export function isUnpaidX402DiscoveryProbe(req) {
-  return req.method === "POST"
-    && req.body !== null
+  const hasNoBody = req.body === undefined;
+  const hasEmptyObjectBody = req.body !== null
     && typeof req.body === "object"
     && !Array.isArray(req.body)
-    && Object.keys(req.body).length === 0
+    && Object.keys(req.body).length === 0;
+  return req.method === "POST"
+    && (hasNoBody || hasEmptyObjectBody)
     && req.get("payment-signature") === undefined
     && req.get("x-payment") === undefined;
 }
@@ -85,9 +87,10 @@ export function createApp({ config, db, chain, auth, x402Middleware }) {
   if (config.x402Enabled) {
     app.use("/v1/paygo/execute", (req, _res, next) => {
       try {
-        // CDP Bazaar validates POST resources with an empty, unpaid discovery
-        // probe. Let only that probe reach x402 so it receives the canonical
-        // 402 challenge; malformed paid requests still fail before verification.
+        // CDP Bazaar sends an empty JSON object while x402scan sends a bodyless
+        // POST. Let only those unpaid probes reach x402 so they receive the
+        // canonical 402 challenge; malformed paid requests still fail before
+        // verification or settlement.
         if (isUnpaidX402DiscoveryProbe(req)) return next();
         assert(req.method === "POST" && req.body && typeof req.body === "object", 400, "invalid_input", "request must be an object");
         assert(typeof req.body.tool === "string" && Object.hasOwn(TOOL_REGISTRY, req.body.tool), 404, "unknown_tool", "Unknown GoldKey tool");
