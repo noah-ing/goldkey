@@ -6,7 +6,7 @@
       "type": "archive",
       "description": "Evaluate and use GoldKey deterministic agent APIs for JSON canonicalization and validation, prompt-injection signal scanning, URL checks, spend-mandate checks, and Unicode normalization. Use when an OpenClaw or comparable agent needs one of these utilities, needs to compare 0.01-USDC paygo with a 50-USDC 10,000-call access pass, or needs unsigned purchase, renewal, authentication, quota, or delegated-key operations.",
       "url": "./goldkey-agent-utilities.tar.gz",
-      "digest": "sha256:5c64a5d34ef0e84dd1fc2d8f2633f5df13f0c193d222f4d0ba212022d78f3005"
+      "digest": "sha256:f130c3db762a87a65e932beb6fc5c4f9543fe56443e4b6284edee68cb3a9b59a"
     }
   ]
 }
