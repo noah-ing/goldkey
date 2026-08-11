@@ -493,6 +493,27 @@ function guardInstallationSchema() {
   };
 }
 
+function guardRevocationSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["schema", "target_kind", "target_id", "operator_wallet", "audience", "issued_at", "signature"],
+    properties: {
+      schema: { const: "goldkey.guard-revocation.v1" },
+      target_kind: { enum: ["policy", "installation"] },
+      target_id: { type: "string" },
+      operator_wallet: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+      audience: { type: "string", format: "uri", description: "Exact GoldKey HTTPS origin" },
+      issued_at: { type: "string", format: "date-time" },
+      signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 8194 },
+    },
+    allOf: [
+      { if: { properties: { target_kind: { const: "policy" } } }, then: { properties: { target_id: guardSha256 } } },
+      { if: { properties: { target_kind: { const: "installation" } } }, then: { properties: { target_id: guardInstallationIdentifier } } },
+    ],
+  };
+}
+
 function guardCallSchema(kinds = ["mcp_tool", "https", "evm_transaction"]) {
   const variants = [];
   if (kinds.includes("mcp_tool")) variants.push({
@@ -656,6 +677,13 @@ function guardPaths(config) {
     },
   });
   return {
+    "/guard/terms": {
+      get: {
+        operationId: "goldkey_guard_terms",
+        description: "Return the separate GoldKey Guard beta terms. Guard is not included in the immutable utility-pass terms.",
+        responses: { 200: { description: "Guard terms", content: { "text/markdown": {} } } },
+      },
+    },
     "/.well-known/goldkey-guard-keys.json": {
       get: { operationId: "goldkey_guard_receipt_keyset", description: "Public Ed25519 keyset for offline verification of Guard authorization receipts.", responses: { 200: { description: "Current and retained receipt verification keys" } } },
     },
@@ -673,6 +701,14 @@ function guardPaths(config) {
         description: "Bind one public Ed25519 installation identity to the latest active operator-signed policy. Private keys never leave the local enforcer.",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardInstallation" } } } },
         responses: { 201: { description: "Installation registered" }, 200: { description: "Exact idempotent replay" }, 401: { description: "Invalid operator signature" }, 429: { description: "Registration rate limit exceeded" } },
+      },
+    },
+    "/v1/guard/revocations": {
+      post: {
+        operationId: "goldkey_guard_revoke",
+        description: "Submit an operator-signed revocation for a policy hash or installation identity. Revocation prevents new authorizations and is a free control-plane operation.",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/GuardRevocation" } } } },
+        responses: { 200: { description: "Target revoked or exact replay" }, 400: { description: "Malformed revocation" }, 401: { description: "Invalid operator signature" }, 409: { description: "Revocation conflicts with the registered operator or target" }, 429: { description: "Registration rate limit exceeded" } },
       },
     },
     "/v1/guard/paygo/authorize/network": premium(
@@ -902,6 +938,7 @@ export function buildOpenApi(config) {
         ...(config.guardEnabled ? {
           GuardPolicy: guardPolicySchema(),
           GuardInstallation: guardInstallationSchema(),
+          GuardRevocation: guardRevocationSchema(),
           GuardNetworkRequest: guardRequestSchema(["mcp_tool", "https"]),
           GuardEvmRequest: guardRequestSchema(["evm_transaction"]),
           GuardCommit: guardLifecycleSchema(false),

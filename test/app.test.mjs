@@ -551,6 +551,25 @@ test("Guard exposes signed registration, keyset, lifecycle, catalog, and OpenAPI
     pass_included: false,
   });
   const openapi = await json(await fetch(`${base}/openapi.json`));
+  const expectedGuardPaths = [
+    "/guard/terms",
+    "/.well-known/goldkey-guard-keys.json",
+    "/v1/guard/policies",
+    "/v1/guard/installations",
+    "/v1/guard/revocations",
+    "/v1/guard/paygo/authorize/network",
+    "/v1/guard/paygo/authorize/evm",
+    "/v1/guard/executions/{executionId}/commit",
+    "/v1/guard/executions/{executionId}/reconcile-commit",
+    "/v1/guard/executions/{executionId}/complete",
+  ];
+  const actualGuardPaths = Object.keys(openapi.body.paths)
+    .filter((path) => path === "/guard/terms" || path === "/.well-known/goldkey-guard-keys.json" || path.startsWith("/v1/guard/"));
+  assert.deepEqual(actualGuardPaths.sort(), expectedGuardPaths.sort());
+  assert.equal(openapi.body.paths["/guard/terms"].get.operationId, "goldkey_guard_terms");
+  assert.ok(openapi.body.paths["/guard/terms"].get.responses[200].content["text/markdown"]);
+  assert.equal(openapi.body.paths["/v1/guard/revocations"].post.operationId, "goldkey_guard_revoke");
+  assert.equal(openapi.body.paths["/v1/guard/revocations"].post.requestBody.content["application/json"].schema.$ref, "#/components/schemas/GuardRevocation");
   assert.equal(openapi.body.paths["/v1/guard/paygo/authorize/network"].post["x-payment-info"].price.amount, "0.05");
   assert.equal(openapi.body.paths["/v1/guard/paygo/authorize/evm"].post["x-payment-info"].price.amount, "0.10");
   assert.match(openapi.body.paths["/v1/guard/paygo/authorize/network"].post.description, /never forwards/i);
@@ -560,6 +579,10 @@ test("Guard exposes signed registration, keyset, lifecycle, catalog, and OpenAPI
   assert.equal(openapi.body.components.schemas.GuardReconciledCommit.properties.payment_proof.properties.payment_payload.properties.accepted.properties.network.const, "eip155:8453");
   assert.ok(openapi.body.components.schemas.GuardInstallation.required.includes("key_proof"));
   assert.equal(openapi.body.components.schemas.GuardInstallation.properties.installation_id.pattern, "^gki_[A-Za-z0-9_-]{43}$");
+  assert.deepEqual(openapi.body.components.schemas.GuardRevocation.required, ["schema", "target_kind", "target_id", "operator_wallet", "audience", "issued_at", "signature"]);
+  assert.deepEqual(openapi.body.components.schemas.GuardRevocation.properties.target_kind.enum, ["policy", "installation"]);
+  assert.equal(openapi.body.components.schemas.GuardRevocation.allOf[0].then.properties.target_id.pattern, "^[0-9a-f]{64}$");
+  assert.equal(openapi.body.components.schemas.GuardRevocation.allOf[1].then.properties.target_id.pattern, "^gki_[A-Za-z0-9_-]{43}$");
   const policyConnectors = openapi.body.components.schemas.GuardPolicy.properties.connectors.items.oneOf;
   assert.equal(policyConnectors[0].properties.tools.items.properties.arguments_schema.type, "object");
   assert.equal(policyConnectors[1].properties.operations.items.properties.query_schema.type, "object");
