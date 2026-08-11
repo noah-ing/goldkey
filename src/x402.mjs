@@ -57,7 +57,9 @@ export function buildX402Routes(config) {
     "POST /v1/paygo/execute": {
       accepts: [{ scheme: "exact", price: "$0.01", network, payTo: config.treasuryAddress }],
       resource: `${config.publicOrigin}/v1/paygo/execute`,
-      description: "Execute one deterministic GoldKey agent utility without buying a pass.",
+      description: "Deterministic JSON validation, prompt-injection scanning, URL safety, spend-policy checks, and Unicode normalization for AI agents.",
+      serviceName: "GoldKey Agent Utilities",
+      tags: ["agent-security", "json-validation", "prompt-injection", "url-safety", "spend-policy"],
       mimeType: "application/json",
       extensions: discovery,
     },

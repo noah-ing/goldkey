@@ -58,5 +58,8 @@ test("x402 binds payment and Bazaar discovery to the permanent public origin", (
     network: "eip155:8453",
     payTo: "0xd6b7E00FcD46966676F554fE0455BfF739e85b1b",
   }]);
+  assert.equal(route.serviceName, "GoldKey Agent Utilities");
+  assert.deepEqual(route.tags, ["agent-security", "json-validation", "prompt-injection", "url-safety", "spend-policy"]);
+  assert.match(route.description, /prompt-injection scanning/);
   assert.ok(route.extensions?.bazaar);
 });
