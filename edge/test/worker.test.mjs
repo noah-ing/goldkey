@@ -186,7 +186,7 @@ test("root storefront serves the honest Guard founding offer for exact GET and H
   assert.match(html, /\$0\.05/);
   assert.match(html, /\$0\.10/);
   assert.match(html, /must have no direct credential, signer, or network route that bypasses the local enforcer/i);
-  assert.match(html, /https:\/\/github\.com\/noah-ing\/goldkey\/issues\/new\?/);
+  assert.match(html, /https:\/\/github\.com\/noah-ing\/goldkey\/issues\/new\?template=guard-pilot\.yml/);
   assert.doesNotMatch(html, /testimonial|trusted by|customers protected/i);
 
   const headResponse = await worker.fetch(new Request("https://edge.example/", { method: "HEAD" }), env({ ASSETS: homepageAssets }));
