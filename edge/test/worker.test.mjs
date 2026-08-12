@@ -14,6 +14,7 @@ const TREASURY = "0x2222222222222222222222222222222222222222";
 const OWNER = "0x3333333333333333333333333333333333333333";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const TERMS_HASH = `0x${"ab".repeat(32)}`;
+const PILOT_EDGE_SECRET = "pilot-edge-secret-for-tests-only-0000000000000000";
 
 const termsAsset = readFileSync(`${EDGE_ROOT}/public/TERMS.md`);
 const schemaAsset = readFileSync(`${EDGE_ROOT}/public/schemas/commerce-response-v1.json`);
@@ -112,11 +113,16 @@ function makeNetwork(options = {}) {
         path: target.pathname,
         query: target.search,
         method: init.method,
+        accept: init.headers.get("accept"),
         authorization: init.headers.get("authorization"),
         cookie: init.headers.get("cookie"),
         api_key: init.headers.get("x-api-key"),
         idempotency_key: init.headers.get("idempotency-key"),
         payment_signature: init.headers.get("payment-signature"),
+        pilot_edge: init.headers.get("x-goldkey-pilot-edge"),
+        client_address: init.headers.get("x-goldkey-client-address"),
+        forwarded_for: init.headers.get("x-forwarded-for"),
+        goldkey_edge: init.headers.get("x-goldkey-edge"),
         body,
       }, { status: target.pathname === "/v1/auth/challenge" ? 201 : 200 });
     }
@@ -178,7 +184,10 @@ test("root storefront serves the honest Guard founding offer for exact GET and H
   assert.equal(getResponse.headers.get("content-type"), "text/html; charset=utf-8");
   assert.equal(getResponse.headers.get("cache-control"), "public, max-age=300");
   assert.equal(getResponse.headers.get("x-frame-options"), "DENY");
-  assert.match(getResponse.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  const contentSecurityPolicy = getResponse.headers.get("content-security-policy");
+  assert.match(contentSecurityPolicy, /frame-ancestors 'none'/);
+  assert.match(contentSecurityPolicy, /connect-src 'self'/);
+  assert.doesNotMatch(contentSecurityPolicy, /script-src 'unsafe-inline'/);
   const html = await getResponse.text();
   assert.match(html, /Founding design-partner beta/i);
   assert.match(html, /No receipt[\s\S]*No execution/i);
@@ -186,7 +195,22 @@ test("root storefront serves the honest Guard founding offer for exact GET and H
   assert.match(html, /\$0\.05/);
   assert.match(html, /\$0\.10/);
   assert.match(html, /must have no direct credential, signer, or network route that bypasses the local enforcer/i);
-  assert.match(html, /https:\/\/github\.com\/noah-ing\/goldkey\/issues\/new\?template=guard-pilot\.yml/);
+  assert.doesNotMatch(html, /github\.com\/noah-ing\/goldkey\/issues\/new/);
+  assert.match(html, /<form class="application-form" id="pilot-form" action="\/v1\/pilot\/applications" method="post">/);
+  for (const field of ["name", "email", "company", "agent_stack", "connector", "action", "timeline", "website", "budget_confirmed"]) {
+    assert.match(html, new RegExp(`name="${field}"`));
+  }
+  for (const [field, maximum] of Object.entries({ name: 100, email: 254, company: 160, agent_stack: 500, connector: 240, action: 2000, timeline: 240, website: 500 })) {
+    assert.match(html, new RegExp(`name="${field}"[^>]*maxlength="${maximum}"`));
+  }
+  assert.match(html, /fetch\("\/v1\/pilot\/applications"/);
+  assert.match(html, /No payment is due with this application/);
+  assert.match(html, /not posted publicly/);
+  assert.doesNotMatch(html, /email notification|we(?:'|’)ll notify/i);
+  const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(inlineScript);
+  const scriptHash = createHash("sha256").update(inlineScript).digest("base64");
+  assert.ok(contentSecurityPolicy.includes(`script-src 'sha256-${scriptHash}'`));
   assert.doesNotMatch(html, /testimonial|trusted by|customers protected/i);
 
   const headResponse = await worker.fetch(new Request("https://edge.example/", { method: "HEAD" }), env({ ASSETS: homepageAssets }));
@@ -597,6 +621,172 @@ test("only the exact stateful allowlist is proxied and important headers survive
   const wrongGateMethod = await worker.fetch(new Request("https://edge.example/v1/action-gate"), env());
   assert.equal(wrongGateMethod.status, 405);
   assert.equal(network.requests.length, before);
+});
+
+test("pilot applications proxy only the exact enabled POST and replace spoofable source headers", async () => {
+  const network = makeNetwork();
+  const worker = createWorker({ fetchImpl: network.fetchImpl });
+  const configured = env({
+    PILOT_APPLICATIONS_ENABLED: "true",
+    PILOT_EDGE_SECRET,
+  });
+  const application = {
+    name: "Ada Operator",
+    email: "ada@example.com",
+    company: "Example Labs",
+    agent_stack: "Custom MCP client",
+    connector: "Billing MCP",
+    action: "Create a refund only below an operator-controlled limit",
+    timeline: "This month",
+    website: "",
+    budget_confirmed: true,
+  };
+  const response = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+    method: "POST",
+    headers: {
+      accept: "text/secret",
+      authorization: "Bearer must-not-forward",
+      cookie: "session=must-not-forward",
+      "content-type": "application/json",
+      "idempotency-key": "pilot-00000000-0000-4000-8000-000000000001",
+      "x-api-key": "must-not-forward",
+      "x-forwarded-for": "198.51.100.99",
+      "x-goldkey-edge": "spoofed",
+      "x-goldkey-pilot-edge": "spoofed-secret",
+      "x-goldkey-client-address": "198.51.100.98",
+      "cf-connecting-ip": "203.0.113.42",
+    },
+    body: JSON.stringify(application),
+  }), configured);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("x-goldkey-pilot-edge"), null);
+  assert.equal(response.headers.get("x-goldkey-client-address"), null);
+  assert.equal(response.headers.get("access-control-allow-origin"), null);
+  const echo = await body(response);
+  assert.equal(echo.path, "/v1/pilot/applications");
+  assert.equal(echo.query, "");
+  assert.equal(echo.method, "POST");
+  assert.equal(echo.authorization, null);
+  assert.equal(echo.cookie, null);
+  assert.equal(echo.api_key, null);
+  assert.equal(echo.accept, null);
+  assert.equal(echo.pilot_edge, PILOT_EDGE_SECRET);
+  assert.equal(echo.client_address, "203.0.113.42");
+  assert.equal(echo.forwarded_for, null);
+  assert.equal(echo.goldkey_edge, null);
+  assert.equal(echo.idempotency_key, "pilot-00000000-0000-4000-8000-000000000001");
+  assert.equal(echo.body, JSON.stringify(application));
+
+  const originRequest = network.requests.at(-1);
+  assert.equal(originRequest.target.origin, "https://origin.example");
+  assert.deepEqual([...originRequest.init.headers.keys()].sort(), [
+    "content-type",
+    "idempotency-key",
+    "x-goldkey-client-address",
+    "x-goldkey-pilot-edge",
+  ]);
+  assert.equal(originRequest.init.headers.get("x-goldkey-pilot-edge"), PILOT_EDGE_SECRET);
+  assert.equal(originRequest.init.headers.get("x-goldkey-client-address"), "203.0.113.42");
+  assert.equal(originRequest.init.headers.get("x-forwarded-for"), null);
+
+  const preflight = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", { method: "OPTIONS" }), configured);
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-methods"), "POST,OPTIONS");
+  assert.equal(preflight.headers.get("access-control-allow-headers"), "content-type,idempotency-key");
+  assert.equal(preflight.headers.get("access-control-allow-origin"), null);
+
+  const beforeFailures = network.requests.length;
+  const wrongMethod = await worker.fetch(new Request("https://edge.example/v1/pilot/applications"), configured);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "POST");
+  for (const path of [
+    "/v1/pilot/application",
+    "/v1/pilot/applications/",
+    "/v1/pilot/applications/anything",
+  ]) {
+    const nearMiss = await worker.fetch(new Request(`https://edge.example${path}`, { method: "POST" }), configured);
+    assert.equal(nearMiss.status, 404, path);
+    const nearMissPreflight = await worker.fetch(new Request(`https://edge.example${path}`, { method: "OPTIONS" }), configured);
+    assert.equal(nearMissPreflight.status, 404, `OPTIONS ${path}`);
+  }
+  const query = await worker.fetch(new Request("https://edge.example/v1/pilot/applications?source=storefront", {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": "pilot-query-0000001" },
+    body: JSON.stringify(application),
+  }), configured);
+  assert.equal(query.status, 400);
+  assert.equal((await body(query)).error.code, "invalid_request");
+  const wrongContentType = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+    method: "POST",
+    headers: { "content-type": "text/plain", "idempotency-key": "pilot-content-type-0001" },
+    body: JSON.stringify(application),
+  }), configured);
+  assert.equal(wrongContentType.status, 415);
+  assert.equal((await body(wrongContentType)).error.code, "unsupported_media_type");
+  const missingIdempotency = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(application),
+  }), configured);
+  assert.equal(missingIdempotency.status, 400);
+  assert.equal((await body(missingIdempotency)).error.code, "invalid_idempotency_key");
+  assert.equal(network.requests.length, beforeFailures);
+
+  const oversizedNetwork = makeNetwork();
+  const oversizedWorker = createWorker({ fetchImpl: oversizedNetwork.fetchImpl });
+  const oversized = await oversizedWorker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+    method: "POST",
+    headers: { "content-type": "application/json", "idempotency-key": "pilot-oversized-0001" },
+    body: "x".repeat((16 * 1024) + 1),
+  }), configured);
+  assert.equal(oversized.status, 413);
+  assert.equal((await body(oversized)).error.code, "request_too_large");
+  assert.equal(oversizedNetwork.requests.length, 0);
+});
+
+test("pilot applications remain undiscoverable when disabled and never proxy without the edge secret", async () => {
+  for (const flag of [undefined, "false", "TRUE", "1", true]) {
+    const network = makeNetwork();
+    const worker = createWorker({ fetchImpl: network.fetchImpl });
+    const configured = env({ PILOT_APPLICATIONS_ENABLED: flag, PILOT_EDGE_SECRET });
+    const response = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "pilot-disabled-0001" },
+      body: "{}",
+    }), configured);
+    assert.equal(response.status, 404, String(flag));
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+    const preflight = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", { method: "OPTIONS" }), configured);
+    assert.equal(preflight.status, 404, `OPTIONS ${String(flag)}`);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), null);
+    assert.equal(network.requests.length, 0);
+  }
+
+  for (const secret of [undefined, "", "too-short"] ) {
+    const network = makeNetwork();
+    const worker = createWorker({ fetchImpl: network.fetchImpl });
+    const response = await worker.fetch(new Request("https://edge.example/v1/pilot/applications", {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "pilot-no-secret-0001" },
+      body: "{}",
+    }), env({ PILOT_APPLICATIONS_ENABLED: "true", PILOT_EDGE_SECRET: secret }));
+    assert.equal(response.status, 503, String(secret));
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+    assert.equal((await body(response)).error.code, "pilot_applications_unavailable");
+    assert.equal(network.requests.length, 0);
+  }
+});
+
+test("pilot intake remains separate from public agent discovery", async () => {
+  const worker = createWorker({ fetchImpl: makeNetwork().fetchImpl });
+  const configured = env({ PILOT_APPLICATIONS_ENABLED: "true", PILOT_EDGE_SECRET });
+  const openapi = await body(await worker.fetch(new Request("https://edge.example/openapi.json"), configured));
+  const catalogResponse = await body(await worker.fetch(new Request("https://edge.example/v1/catalog"), configured));
+  const agent = await body(await worker.fetch(new Request("https://edge.example/.well-known/agent.json"), configured));
+  assert.equal(openapi.paths["/v1/pilot/applications"], undefined);
+  assert.equal(JSON.stringify(catalogResponse).includes("/v1/pilot/applications"), false);
+  assert.equal(JSON.stringify(agent).includes("/v1/pilot/applications"), false);
 });
 
 test("Guard discovery and proxy routes fail closed unless GUARD_ENABLED is exactly true", async () => {

@@ -26,7 +26,7 @@ test("Postgres migrations preserve every durable ledger table and lock migration
   assert.equal(released, true);
   assert.deepEqual(statements.slice(0, 2), ["BEGIN", "SELECT pg_advisory_xact_lock($1)"]);
   assert.equal(statements.at(-1), "COMMIT");
-  for (const table of ["auth_challenges", "sessions", "access_keys", "usage_terms", "usage_dedupe", "usage_daily"]) {
+  for (const table of ["auth_challenges", "sessions", "access_keys", "usage_terms", "usage_dedupe", "usage_daily", "pilot_applications"]) {
     assert.match(POSTGRES_SCHEMA, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   }
   assert.match(POSTGRES_SCHEMA, /PRIMARY KEY \(token_id, term_number, principal_id, idempotency_key\)/);

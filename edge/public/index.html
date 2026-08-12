@@ -189,14 +189,17 @@
       border-radius: 999px;
       color: var(--paper);
       text-decoration: none;
+      font-family: inherit;
       font-size: 14px;
       font-weight: 760;
+      cursor: pointer;
       transition: transform .16s ease, background .16s ease, border-color .16s ease;
     }
 
     .button:hover { transform: translateY(-2px); border-color: rgba(247,241,223,.28); }
     .button.primary { color: var(--ink); background: var(--gold); border-color: var(--gold); }
     .button.primary:hover { background: var(--gold-light); }
+    .button:disabled { cursor: wait; opacity: .62; transform: none; }
 
     .hero-note {
       margin: 18px 0 0 !important;
@@ -442,6 +445,111 @@
     .meter-price small { color: var(--muted); font: 11px/1.2 ui-sans-serif, sans-serif; letter-spacing: 0; }
     .billing-note { margin: 0; padding: 22px 34px; color: #8c887b; background: rgba(242,197,92,.035); font-size: 12px; }
 
+    .application {
+      border-top: 1px solid var(--soft-line);
+      border-bottom: 1px solid var(--soft-line);
+      background: rgba(255,255,255,.012);
+    }
+
+    .application-layout {
+      display: grid;
+      grid-template-columns: minmax(240px, .72fr) minmax(0, 1.28fr);
+      gap: clamp(42px, 8vw, 110px);
+      align-items: start;
+    }
+
+    .application-copy { position: sticky; top: 34px; }
+    .application-copy h2 { font-size: clamp(42px, 5vw, 64px); }
+    .application-copy .section-intro { font-size: 16px; }
+
+    .application-form {
+      position: relative;
+      padding: clamp(25px, 5vw, 42px);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(17,17,15,.92);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+    }
+
+    .field { display: grid; gap: 8px; }
+    .field-wide { grid-column: 1 / -1; }
+
+    .field label, .field-label {
+      color: #c7c2b2;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .field input, .field textarea {
+      width: 100%;
+      border: 1px solid rgba(247,241,223,.16);
+      border-radius: 10px;
+      padding: 12px 13px;
+      color: var(--paper);
+      background: #0c0c0b;
+      font: inherit;
+      font-size: 14px;
+    }
+
+    .field textarea { min-height: 116px; resize: vertical; }
+    .field input::placeholder, .field textarea::placeholder { color: #68655b; }
+    .field input:focus, .field textarea:focus { outline: 2px solid var(--gold-light); outline-offset: 2px; border-color: transparent; }
+
+    .field-help {
+      margin: 0;
+      color: #777469;
+      font-size: 11px;
+    }
+
+    .check-field {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 11px;
+      align-items: start;
+      color: #b8b3a4;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .check-field input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--gold); }
+
+    .form-footer {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin-top: 26px;
+    }
+
+    .form-footer .button { flex: 0 0 auto; }
+    .form-status { min-height: 22px; margin: 0; color: var(--muted); font-size: 13px; }
+    .form-status[data-state="success"] { color: var(--gold-light); }
+    .form-status[data-state="error"] { color: #ffb4a9; }
+
+    .privacy-note {
+      margin: 22px 0 0;
+      padding-top: 18px;
+      border-top: 1px solid var(--soft-line);
+      color: #777469;
+      font-size: 11px;
+    }
+
+    .honeypot {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      padding: 0 !important;
+      margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
+    }
+
     .limits-layout {
       display: grid;
       grid-template-columns: .78fr 1.22fr;
@@ -507,7 +615,8 @@
       .fact:nth-child(2) { border-right: 0; }
       .fact:nth-child(-n+2) { border-bottom: 1px solid var(--soft-line); }
       .fact:nth-child(3) { padding-left: 0; }
-      .section-head, .limits-layout { grid-template-columns: 1fr; gap: 20px; }
+      .section-head, .limits-layout, .application-layout { grid-template-columns: 1fr; gap: 20px; }
+      .application-copy { position: static; }
       .feature-grid { grid-template-columns: 1fr; }
       .feature { min-height: 0; }
       .feature-num { margin-bottom: 28px; }
@@ -535,6 +644,10 @@
       .flow { grid-template-columns: 1fr; }
       .step::after { display: none; }
       .meter { grid-template-columns: 1fr; gap: 18px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .field-wide { grid-column: auto; }
+      .form-footer { align-items: stretch; flex-direction: column; }
+      .form-footer .button { width: 100%; }
       .limit-row { grid-template-columns: 1fr; gap: 9px; }
       .final { padding-top: 20px; padding-bottom: 90px; }
       .footer-row { align-items: flex-start; flex-direction: column; }
@@ -558,7 +671,7 @@
         <a href="#architecture">How it works</a>
         <a href="#pricing">Pricing</a>
         <a href="#limits">Limits</a>
-        <a class="nav-cta" href="https://github.com/noah-ing/goldkey/issues/new?template=guard-pilot.yml" target="_blank" rel="noreferrer">Apply for pilot</a>
+        <a class="nav-cta" href="#pilot-application">Apply for pilot</a>
       </div>
     </nav>
   </header>
@@ -570,10 +683,10 @@
         <h1>No receipt.<br>No execution.</h1>
         <p>GoldKey Guard puts operator-controlled policy in the real execution path of an AI agent. Install a config-driven local MCP, AgentCash, or Base-wallet enforcer; the exact proposed call runs only after it verifies a signed, short-lived ALLOW receipt.</p>
         <div class="actions">
-          <a class="button primary" href="https://github.com/noah-ing/goldkey/issues/new?template=guard-pilot.yml" target="_blank" rel="noreferrer">Start a $1,000 pilot&nbsp; →</a>
+          <a class="button primary" href="#pilot-application">Start a $1,000 pilot&nbsp; →</a>
           <a class="button" href="/openapi.json">Inspect the live API</a>
         </div>
-        <p class="hero-note">Pilot inquiries open a public GitHub issue. Never include credentials, private keys, or confidential payloads.</p>
+        <p class="hero-note">Apply privately below. No payment is collected with your application.</p>
       </div>
 
       <div class="terminal" aria-label="Example signed authorization receipt">
@@ -682,7 +795,7 @@
             <li>One initial operator policy</li>
             <li>Up to two hours of implementation support</li>
           </ul>
-          <a class="button primary" href="https://github.com/noah-ing/goldkey/issues/new?template=guard-pilot.yml" target="_blank" rel="noreferrer">Apply for the pilot&nbsp; →</a>
+          <a class="button primary" href="#pilot-application">Apply for the pilot&nbsp; →</a>
         </article>
 
         <article class="meter-card" aria-label="Authorization usage prices">
@@ -702,6 +815,67 @@
           </div>
           <p class="billing-note">ALLOW, REVIEW, and BLOCK decisions are billable. Exact unexpired idempotent replays are not billed again. Usage is paid through x402 on Base.</p>
         </article>
+      </div>
+    </section>
+
+    <section class="application" id="pilot-application" aria-labelledby="application-title">
+      <div class="wrap application-layout">
+        <div class="application-copy">
+          <p class="eyebrow">Private pilot application</p>
+          <h2 id="application-title">Start with one action that matters.</h2>
+          <p class="section-intro">Tell us where the agent acts, what it can reach, and the exact operation you need enforced. We use this only to assess and respond to your pilot inquiry.</p>
+        </div>
+
+        <form class="application-form" id="pilot-form" action="/v1/pilot/applications" method="post">
+          <div class="form-grid">
+            <div class="field">
+              <label for="pilot-name">Your name</label>
+              <input id="pilot-name" name="name" type="text" autocomplete="name" minlength="2" maxlength="100" required>
+            </div>
+            <div class="field">
+              <label for="pilot-email">Work email</label>
+              <input id="pilot-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+            </div>
+            <div class="field">
+              <label for="pilot-company">Company <span aria-hidden="true">(optional)</span></label>
+              <input id="pilot-company" name="company" type="text" autocomplete="organization" maxlength="160">
+            </div>
+            <div class="field">
+              <label for="pilot-timeline">Target timeline <span aria-hidden="true">(optional)</span></label>
+              <input id="pilot-timeline" name="timeline" type="text" maxlength="240" placeholder="For example: this month">
+            </div>
+            <div class="field field-wide">
+              <label for="pilot-stack">Agent stack</label>
+              <input id="pilot-stack" name="agent_stack" type="text" minlength="2" maxlength="500" placeholder="For example: Claude Code + a custom MCP client" required>
+              <p class="field-help">Name the runtime or framework that proposes the calls.</p>
+            </div>
+            <div class="field field-wide">
+              <label for="pilot-connector">Connector or signer</label>
+              <input id="pilot-connector" name="connector" type="text" minlength="2" maxlength="240" placeholder="For example: a Stripe MCP server or Base wallet" required>
+              <p class="field-help">Do not include API keys, private keys, credentials, or confidential payloads.</p>
+            </div>
+            <div class="field field-wide">
+              <label for="pilot-action">Action to guard</label>
+              <textarea id="pilot-action" name="action" minlength="10" maxlength="2000" placeholder="Describe one real state-changing action and the policy that should allow, review, or block it." required></textarea>
+            </div>
+            <div class="field field-wide honeypot" aria-hidden="true">
+              <label for="pilot-website">Website</label>
+              <input id="pilot-website" name="website" type="text" tabindex="-1" autocomplete="off" maxlength="500">
+            </div>
+            <div class="field-wide">
+              <label class="check-field" for="pilot-budget">
+                <input id="pilot-budget" name="budget_confirmed" type="checkbox" required>
+                <span>I understand that, if accepted, the founding implementation pilot costs $1,000 plus metered authorization usage. No payment is due with this application.</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-footer">
+            <button class="button primary" id="pilot-submit" type="submit">Send private application&nbsp; →</button>
+            <p class="form-status" id="pilot-status" role="status" aria-live="polite"></p>
+          </div>
+          <p class="privacy-note">Your application is sent directly to GoldKey and is not posted publicly. We use the contact details to respond about this pilot and retain applications for up to 90 days. Please do not submit secrets or regulated data.</p>
+        </form>
       </div>
     </section>
 
@@ -745,7 +919,7 @@
           <h2 id="final-title">Put one real agent action behind Guard.</h2>
           <p>Bring one environment, one connector, and the policy you need enforced. We will scope the path and acceptance criteria before the paid pilot begins.</p>
         </div>
-        <a class="button primary" href="https://github.com/noah-ing/goldkey/issues/new?template=guard-pilot.yml" target="_blank" rel="noreferrer">Apply for pilot&nbsp; →</a>
+        <a class="button primary" href="#pilot-application">Apply for pilot&nbsp; →</a>
       </div>
     </section>
   </main>
@@ -762,5 +936,85 @@
       </div>
     </div>
   </footer>
+  <script>
+    (() => {
+      const form = document.getElementById("pilot-form");
+      const submit = document.getElementById("pilot-submit");
+      const status = document.getElementById("pilot-status");
+      const storageKey = "goldkey.pilot.application.v1";
+
+      const setStatus = (message, state = "") => {
+        status.textContent = message;
+        status.dataset.state = state;
+        status.setAttribute("role", state === "error" ? "alert" : "status");
+      };
+
+      const fingerprint = async (payload) => {
+        const bytes = new TextEncoder().encode(JSON.stringify(payload));
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      };
+
+      const freshKey = () => `pilot-${crypto.randomUUID()}`;
+
+      const idempotencyKey = async (payload) => {
+        const payloadFingerprint = await fingerprint(payload);
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(storageKey));
+          if (saved?.fingerprint === payloadFingerprint && /^pilot-[0-9a-f-]{36}$/.test(saved?.key)) return saved.key;
+        } catch {}
+        const key = freshKey();
+        try {
+          sessionStorage.setItem(storageKey, JSON.stringify({ key, fingerprint: payloadFingerprint }));
+        } catch {}
+        return key;
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+
+        const data = new FormData(form);
+        const payload = {
+          name: data.get("name"),
+          email: data.get("email"),
+          company: data.get("company") || undefined,
+          agent_stack: data.get("agent_stack"),
+          connector: data.get("connector"),
+          action: data.get("action"),
+          timeline: data.get("timeline") || undefined,
+          website: data.get("website") || "",
+          budget_confirmed: data.get("budget_confirmed") === "on",
+        };
+
+        submit.disabled = true;
+        form.setAttribute("aria-busy", "true");
+        setStatus("Sending your application…");
+
+        try {
+          const response = await fetch("/v1/pilot/applications", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "idempotency-key": await idempotencyKey(payload),
+            },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result?.error?.message || "The application could not be submitted.");
+
+          try { sessionStorage.removeItem(storageKey); } catch {}
+          form.reset();
+          const reference = /^pil_[0-9a-f-]{36}$/.test(result?.application_id) ? ` Reference: ${result.application_id}.` : "";
+          setStatus(`Application received.${reference} We’ll use your email if the pilot is a fit.`, "success");
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : "The application could not be submitted. Please try again.", "error");
+        } finally {
+          submit.disabled = false;
+          form.removeAttribute("aria-busy");
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

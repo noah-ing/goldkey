@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
 import { getAddress } from "viem";
@@ -7,10 +8,13 @@ import { createAuthService } from "../src/auth.mjs";
 import { loadConfig } from "../src/config.mjs";
 import { GoldKeyDatabase } from "../src/database.mjs";
 import { ServiceError } from "../src/errors.mjs";
+import { createPilotApplicationsService } from "../src/pilot-applications.mjs";
 import { createGuardBeforeSettlementHook } from "../src/x402.mjs";
 
 const OWNER = getAddress("0x000000000000000000000000000000000000dEaD");
 const PUBLIC_ORIGIN = "http://127.0.0.1:8402";
+const PILOT_ADMIN_TOKEN = "pilot-admin-token-for-app-route-tests-that-is-long-enough";
+const PILOT_EDGE_SECRET = "pilot-edge-secret-for-app-route-tests-that-is-long-enough";
 
 async function fixture(t, overrides = {}) {
   const config = loadConfig({
@@ -28,6 +32,14 @@ async function fixture(t, overrides = {}) {
     guardAllowedOperatorWallets: overrides.guardAllowedOperatorWallets ?? (overrides.guardEnabled ? [OWNER] : []),
     devAuthBypass: true,
     devAuthToken: "test-owner-token-that-is-long",
+    pilotApplicationsEnabled: overrides.pilotApplicationsEnabled ?? false,
+    pilotAdminTokenSha256: overrides.pilotAdminTokenSha256 ?? (overrides.pilotApplicationsEnabled
+      ? createHash("sha256").update(PILOT_ADMIN_TOKEN).digest("hex")
+      : ""),
+    pilotAbuseSecret: overrides.pilotAbuseSecret ?? (overrides.pilotApplicationsEnabled
+      ? "pilot-abuse-secret-for-app-route-tests-that-is-long-enough"
+      : ""),
+    pilotEdgeSecret: overrides.pilotEdgeSecret ?? (overrides.pilotApplicationsEnabled ? PILOT_EDGE_SECRET : ""),
   });
   let owner = OWNER;
   let ownershipEpoch = 0;
@@ -41,7 +53,15 @@ async function fixture(t, overrides = {}) {
   };
   const db = new GoldKeyDatabase();
   const auth = createAuthService({ config, db, chain });
-  const app = createApp({ config, db, chain, auth, guard: overrides.guard, x402Middleware: overrides.x402Middleware });
+  const pilotApplications = overrides.pilotApplications ?? (config.pilotApplicationsEnabled
+    ? createPilotApplicationsService({
+        database: db,
+        adminTokenSha256: config.pilotAdminTokenSha256,
+        abuseSecret: config.pilotAbuseSecret,
+        retentionDays: config.pilotRetentionDays,
+      })
+    : undefined);
+  const app = createApp({ config, db, chain, auth, guard: overrides.guard, pilotApplications, x402Middleware: overrides.x402Middleware });
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -127,6 +147,83 @@ test("bodyless authentication probes return field errors instead of internal err
   const verify = await json(await fetch(`${base}/v1/auth/verify`, { method: "POST" }));
   assert.equal(verify.response.status, 400);
   assert.equal(verify.body.error.code, "invalid_challenge");
+});
+
+test("pilot applications accept only edge-authenticated submissions and keep applicant data behind the admin bearer", async (t) => {
+  const { base } = await fixture(t, { pilotApplicationsEnabled: true });
+  const application = {
+    name: "Ada Operator",
+    email: "ada@example.com",
+    company: "Example Labs",
+    agent_stack: "Claude Code with a private MCP server",
+    connector: "Production billing MCP",
+    action: "Create a refund only after operator-controlled policy approval.",
+    timeline: "This month",
+    website: "",
+    budget_confirmed: true,
+  };
+  const submissionHeaders = {
+    "content-type": "application/json",
+    "idempotency-key": "pilot-app-route-0000000000000001",
+    "x-goldkey-client-address": "203.0.113.7",
+  };
+
+  const direct = await json(await fetch(`${base}/v1/pilot/applications`, {
+    method: "POST",
+    headers: submissionHeaders,
+    body: JSON.stringify(application),
+  }));
+  assert.equal(direct.response.status, 403);
+  assert.equal(direct.body.error.code, "pilot_edge_required");
+
+  const submitted = await json(await fetch(`${base}/v1/pilot/applications`, {
+    method: "POST",
+    headers: { ...submissionHeaders, "x-goldkey-pilot-edge": PILOT_EDGE_SECRET },
+    body: JSON.stringify(application),
+  }));
+  assert.equal(submitted.response.status, 201);
+  assert.equal(submitted.body.status, "received");
+  assert.match(submitted.body.application_id, /^pil_[0-9a-f-]{36}$/);
+  assert.equal(JSON.stringify(submitted.body).includes(application.email), false);
+
+  const replay = await json(await fetch(`${base}/v1/pilot/applications`, {
+    method: "POST",
+    headers: { ...submissionHeaders, "x-goldkey-pilot-edge": PILOT_EDGE_SECRET },
+    body: JSON.stringify(application),
+  }));
+  assert.equal(replay.response.status, 200);
+  assert.equal(replay.body.idempotent_replay, true);
+  assert.equal(replay.body.application_id, submitted.body.application_id);
+
+  const unauthorizedSummary = await json(await fetch(`${base}/v1/admin/pilot/applications/summary`, {
+    headers: { authorization: "Bearer incorrect-but-deliberately-long-admin-token" },
+  }));
+  assert.equal(unauthorizedSummary.response.status, 401);
+  assert.equal(unauthorizedSummary.body.error.code, "pilot_admin_unauthorized");
+
+  const adminHeaders = { authorization: `Bearer ${PILOT_ADMIN_TOKEN}` };
+  const summary = await json(await fetch(`${base}/v1/admin/pilot/applications/summary`, { headers: adminHeaders }));
+  assert.equal(summary.response.status, 200);
+  assert.equal(summary.body.total_active, 1);
+  assert.deepEqual(summary.body.newest, {
+    application_id: submitted.body.application_id,
+    submitted_at: summary.body.newest.submitted_at,
+  });
+  assert.match(summary.body.newest.submitted_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(JSON.stringify(summary.body).includes(application.email), false);
+
+  const listed = await json(await fetch(`${base}/v1/admin/pilot/applications?limit=10`, { headers: adminHeaders }));
+  assert.equal(listed.response.status, 200);
+  assert.equal(listed.body.applications.length, 1);
+  assert.equal(listed.body.applications[0].email, application.email);
+
+  const reviewed = await json(await fetch(`${base}/v1/admin/pilot/applications/${submitted.body.application_id}`, {
+    method: "PATCH",
+    headers: { ...adminHeaders, "content-type": "application/json" },
+    body: JSON.stringify({ status: "reviewing", admin_note: "Acceptance-route test" }),
+  }));
+  assert.equal(reviewed.response.status, 200);
+  assert.equal(reviewed.body.application.status, "reviewing");
 });
 
 test("commerce endpoint sells only above break-even and disabled paygo never leaks free calls", async (t) => {

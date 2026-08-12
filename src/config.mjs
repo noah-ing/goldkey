@@ -124,6 +124,7 @@ export function loadConfig(overrides = {}) {
   const nodeEnv = overrides.nodeEnv ?? process.env.NODE_ENV ?? "development";
   const x402Enabled = overrides.x402Enabled ?? boolean("X402_ENABLED", false);
   const guardEnabled = overrides.guardEnabled ?? boolean("GUARD_ENABLED", false);
+  const pilotApplicationsEnabled = overrides.pilotApplicationsEnabled ?? boolean("PILOT_APPLICATIONS_ENABLED", false);
   const guardAllowedOperatorWallets = parsedGuardAllowedOperatorWallets(overrides.guardAllowedOperatorWallets);
   const devAuthBypass = overrides.devAuthBypass ?? boolean("DEV_AUTH_BYPASS", false);
   if (nodeEnv === "production" && devAuthBypass) throw new Error("DEV_AUTH_BYPASS cannot be enabled in production");
@@ -215,6 +216,28 @@ export function loadConfig(overrides = {}) {
     throw new Error("GUARD_RECEIPT_KEY_ID and GUARD_RECEIPT_PRIVATE_KEY must be set together");
   }
   const guardReceiptPreviousPublicKeys = guardPreviousPublicKeys(overrides.guardReceiptPreviousPublicKeys);
+  const pilotAdminTokenSha256 = optionalText(
+    "PILOT_ADMIN_TOKEN_SHA256",
+    overrides.pilotAdminTokenSha256 ?? process.env.PILOT_ADMIN_TOKEN_SHA256,
+    { maxLength: 64 },
+  ).toLowerCase();
+  const pilotAbuseSecret = optionalText(
+    "PILOT_ABUSE_SECRET",
+    overrides.pilotAbuseSecret ?? process.env.PILOT_ABUSE_SECRET,
+    { maxLength: 512 },
+  );
+  const pilotEdgeSecret = optionalText(
+    "PILOT_EDGE_SECRET",
+    overrides.pilotEdgeSecret ?? process.env.PILOT_EDGE_SECRET,
+    { maxLength: 512 },
+  );
+  if (pilotApplicationsEnabled) {
+    if (!/^[0-9a-f]{64}$/.test(pilotAdminTokenSha256)) {
+      throw new Error("PILOT_ADMIN_TOKEN_SHA256 must be a lowercase SHA-256 hex digest when pilot applications are enabled");
+    }
+    if (pilotAbuseSecret.length < 32) throw new Error("PILOT_ABUSE_SECRET must contain at least 32 characters when pilot applications are enabled");
+    if (pilotEdgeSecret.length < 32) throw new Error("PILOT_EDGE_SECRET must contain at least 32 characters when pilot applications are enabled");
+  }
 
   return Object.freeze({
     nodeEnv,
@@ -234,6 +257,11 @@ export function loadConfig(overrides = {}) {
     guardReceiptPrivateKey,
     guardReceiptPreviousPublicKeys,
     guardAllowedOperatorWallets,
+    pilotApplicationsEnabled,
+    pilotAdminTokenSha256,
+    pilotAbuseSecret,
+    pilotEdgeSecret,
+    pilotRetentionDays: overrides.pilotRetentionDays ?? integer("PILOT_RETENTION_DAYS", 90),
     guardAuthorizationTtlMs: 60_000,
     guardNetworkPriceUsd: "0.05",
     guardEvmPriceUsd: "0.10",

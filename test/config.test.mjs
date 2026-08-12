@@ -84,6 +84,44 @@ test("Guard is disabled by default and exposes fixed premium prices", () => {
   assert.equal(config.guardAuthorizationTtlMs, 60_000);
 });
 
+test("pilot applications are disabled by default and fail closed without independent secrets", () => {
+  const disabled = loadConfig(production);
+  assert.equal(disabled.pilotApplicationsEnabled, false);
+  assert.equal(disabled.pilotRetentionDays, 90);
+
+  assert.throws(
+    () => loadConfig({ ...production, pilotApplicationsEnabled: true }),
+    /PILOT_ADMIN_TOKEN_SHA256/,
+  );
+  assert.throws(
+    () => loadConfig({
+      ...production,
+      pilotApplicationsEnabled: true,
+      pilotAdminTokenSha256: "a".repeat(64),
+    }),
+    /PILOT_ABUSE_SECRET/,
+  );
+  assert.throws(
+    () => loadConfig({
+      ...production,
+      pilotApplicationsEnabled: true,
+      pilotAdminTokenSha256: "a".repeat(64),
+      pilotAbuseSecret: "b".repeat(32),
+    }),
+    /PILOT_EDGE_SECRET/,
+  );
+
+  const enabled = loadConfig({
+    ...production,
+    pilotApplicationsEnabled: true,
+    pilotAdminTokenSha256: "a".repeat(64),
+    pilotAbuseSecret: "b".repeat(32),
+    pilotEdgeSecret: "c".repeat(32),
+  });
+  assert.equal(enabled.pilotApplicationsEnabled, true);
+  assert.equal(enabled.pilotAdminTokenSha256, "a".repeat(64));
+});
+
 test("production Guard fails closed without a receipt signing key pair", () => {
   assert.throws(
     () => loadConfig({ ...production, guardEnabled: true, x402Enabled: true }),

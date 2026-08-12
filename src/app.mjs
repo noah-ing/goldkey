@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import express from "express";
 import { calculateQuote, calculateRenewalQuote, renderCommerceResponse } from "./commerce.mjs";
@@ -15,6 +15,13 @@ function asyncRoute(handler) {
 
 function asyncMiddleware(handler) {
   return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
+function secretsEqual(received, expected) {
+  if (typeof received !== "string" || typeof expected !== "string") return false;
+  const left = Buffer.from(received);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function challengeRateLimiter() {
@@ -104,9 +111,10 @@ function guardSettlementKinds(path) {
   throw new Error("Unsupported Guard settlement path");
 }
 
-export function createApp({ config, db, chain, auth, guard, x402Middleware }) {
+export function createApp({ config, db, chain, auth, guard, pilotApplications, x402Middleware }) {
   const app = express();
   if (config.guardEnabled && !guard) throw new Error("Guard service is required when GUARD_ENABLED is true");
+  if (config.pilotApplicationsEnabled && !pilotApplications) throw new Error("Pilot applications service is required when PILOT_APPLICATIONS_ENABLED is true");
   const termsDocument = readFileSync(new URL("../TERMS.md", import.meta.url), "utf8");
   const guardTermsDocument = config.guardEnabled
     ? readFileSync(new URL("../GUARD_TERMS.md", import.meta.url), "utf8")
@@ -263,6 +271,40 @@ export function createApp({ config, db, chain, auth, guard, x402Middleware }) {
     app.post("/v1/guard/executions/:executionId/complete", asyncRoute(async (req, res) => {
       assert(req.body?.execution_id === req.params.executionId, 409, "guard_lifecycle_mismatch", "Completion execution_id must match the route");
       res.json(await guard.complete(req.body));
+    }));
+  }
+  if (config.pilotApplicationsEnabled) {
+    app.post("/v1/pilot/applications", asyncRoute(async (req, res) => {
+      assert(
+        secretsEqual(req.get("x-goldkey-pilot-edge"), config.pilotEdgeSecret),
+        403,
+        "pilot_edge_required",
+        "Pilot applications must be submitted through the canonical storefront",
+      );
+      const result = await pilotApplications.submit({
+        body: req.body,
+        idempotencyKey: req.get("idempotency-key"),
+        clientAddress: req.get("x-goldkey-client-address") ?? "unknown",
+      });
+      res.status(result.idempotent_replay ? 200 : 201).json(result);
+    }));
+    app.get("/v1/admin/pilot/applications/summary", asyncRoute(async (req, res) => {
+      res.json(await pilotApplications.summary({ authorization: req.get("authorization") }));
+    }));
+    app.get("/v1/admin/pilot/applications", asyncRoute(async (req, res) => {
+      res.json(await pilotApplications.list({
+        authorization: req.get("authorization"),
+        status: req.query.status,
+        limit: req.query.limit,
+        cursor: req.query.cursor,
+      }));
+    }));
+    app.patch("/v1/admin/pilot/applications/:applicationId", asyncRoute(async (req, res) => {
+      res.json(await pilotApplications.review({
+        authorization: req.get("authorization"),
+        applicationId: req.params.applicationId,
+        body: req.body,
+      }));
     }));
   }
   app.get("/.well-known/goldkey.json", asyncRoute(async (_req, res) => res.json(await buildOffer(config, { supplyState: currentSupply }))));

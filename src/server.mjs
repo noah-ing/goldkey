@@ -6,6 +6,7 @@ import { createChainService } from "./chain.mjs";
 import { loadConfig } from "./config.mjs";
 import { createGoldKeyDatabase } from "./database.mjs";
 import { createGuardService } from "./guard-service.mjs";
+import { createPilotApplicationsService } from "./pilot-applications.mjs";
 import { validateX402Facilitator } from "./x402.mjs";
 
 const config = loadConfig();
@@ -17,7 +18,15 @@ const x402 = await validateX402Facilitator(config);
 const db = await createGoldKeyDatabase(config);
 const auth = createAuthService({ config, db, chain });
 const guard = config.guardEnabled ? createGuardService({ config, db, chain, previousPublicKeys: config.guardReceiptPreviousPublicKeys }) : undefined;
-const app = createApp({ config, db, chain, auth, guard });
+const pilotApplications = config.pilotApplicationsEnabled
+  ? createPilotApplicationsService({
+      database: db,
+      adminTokenSha256: config.pilotAdminTokenSha256,
+      abuseSecret: config.pilotAbuseSecret,
+      retentionDays: config.pilotRetentionDays,
+    })
+  : undefined;
+const app = createApp({ config, db, chain, auth, guard, pilotApplications });
 
 const server = app.listen(config.port, () => {
   console.log(JSON.stringify({
@@ -36,6 +45,7 @@ const server = app.listen(config.port, () => {
     guard_enabled: config.guardEnabled,
     guard_network_price_usdc: config.guardEnabled ? config.guardNetworkPriceUsd : undefined,
     guard_evm_price_usdc: config.guardEnabled ? config.guardEvmPriceUsd : undefined,
+    pilot_applications_enabled: config.pilotApplicationsEnabled,
   }));
 });
 

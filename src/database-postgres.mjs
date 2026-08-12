@@ -15,6 +15,8 @@ const MILLIS_FIELDS = new Set([
   "expired_at",
   "settlement_started_at",
   "payment_settled_at",
+  "reviewed_at",
+  "retention_expires_at",
 ]);
 
 const SCHEMA = `
@@ -89,6 +91,37 @@ const SCHEMA = `
     tool TEXT NOT NULL,
     calls INTEGER NOT NULL,
     PRIMARY KEY (token_id, term_number, day, tool)
+  );
+
+  CREATE TABLE IF NOT EXISTS pilot_applications (
+    id TEXT PRIMARY KEY,
+    idempotency_hash TEXT NOT NULL UNIQUE,
+    request_hash TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    contact_fingerprint TEXT NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    company TEXT,
+    agent_stack TEXT NOT NULL,
+    connector TEXT NOT NULL,
+    action_text TEXT NOT NULL,
+    timeline TEXT,
+    budget_confirmed BOOLEAN NOT NULL,
+    status TEXT NOT NULL DEFAULT 'received',
+    admin_note TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    reviewed_at BIGINT,
+    retention_expires_at BIGINT NOT NULL,
+    CHECK (idempotency_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (request_hash ~ '^[0-9a-f]{64}$'),
+    CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    CHECK (contact_fingerprint ~ '^[0-9a-f]{64}$'),
+    CHECK (budget_confirmed),
+    CHECK (status IN ('received', 'reviewing', 'accepted', 'declined', 'closed')),
+    CHECK (updated_at >= created_at),
+    CHECK (reviewed_at IS NULL OR reviewed_at >= created_at),
+    CHECK (retention_expires_at > created_at)
   );
 
   CREATE TABLE IF NOT EXISTS guard_policy_versions (
@@ -216,6 +249,10 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS session_expiry_idx ON sessions(expires_at);
   CREATE INDEX IF NOT EXISTS access_key_token_idx ON access_keys(token_id, term_number);
+  CREATE INDEX IF NOT EXISTS pilot_application_source_idx ON pilot_applications(source_fingerprint, created_at);
+  CREATE INDEX IF NOT EXISTS pilot_application_contact_idx ON pilot_applications(contact_fingerprint, created_at);
+  CREATE INDEX IF NOT EXISTS pilot_application_review_idx ON pilot_applications(status, created_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS pilot_application_retention_idx ON pilot_applications(retention_expires_at);
   CREATE INDEX IF NOT EXISTS guard_installation_policy_idx ON guard_installations(policy_hash);
   CREATE INDEX IF NOT EXISTS guard_execution_installation_idx ON guard_executions(installation_id, created_at);
   CREATE INDEX IF NOT EXISTS guard_reservation_period_idx ON guard_execution_reservations(reservation_key, disposition);
@@ -400,6 +437,26 @@ function guardExecutionRow(row) {
   };
 }
 
+const PILOT_APPLICATION_STATUSES = new Set(["received", "reviewing", "accepted", "declined", "closed"]);
+
+function requirePilotLimit(value, field, maximum = 10_000) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new ServiceError(400, "invalid_pilot_application", `${field} must be a positive bounded integer`);
+  }
+  return value;
+}
+
+function validatePilotCursor(cursor) {
+  if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) {
+    throw new ServiceError(400, "invalid_pilot_application_query", "Invalid pilot application cursor");
+  }
+  requireMillis(cursor.createdAt, "cursor.createdAt");
+  requireNonEmptyString(cursor.id, "cursor.id");
+  if (Object.keys(cursor).some((key) => key !== "createdAt" && key !== "id")) {
+    throw new ServiceError(400, "invalid_pilot_application_query", "Invalid pilot application cursor");
+  }
+}
+
 function idempotencyLockKey({ tokenId, termNumber, principalId, idempotencyKey }) {
   return JSON.stringify([tokenId, termNumber, principalId, idempotencyKey]);
 }
@@ -467,6 +524,188 @@ export class PostgresGoldKeyDatabase {
   async healthCheck() {
     const result = await this.pool.query("SELECT 1 AS ok");
     return result.rows[0]?.ok === 1;
+  }
+
+  async createPilotApplication({
+    id,
+    idempotencyHash,
+    requestHash,
+    sourceFingerprint,
+    contactFingerprint,
+    name,
+    email,
+    company = null,
+    agentStack,
+    connector,
+    action,
+    timeline = null,
+    budgetConfirmed,
+    createdAt,
+    retentionExpiresAt,
+    limits = {},
+  }) {
+    for (const [value, field] of [
+      [id, "id"], [name, "name"], [email, "email"], [agentStack, "agentStack"],
+      [connector, "connector"], [action, "action"],
+    ]) requireNonEmptyString(value, field);
+    for (const [value, field] of [
+      [idempotencyHash, "idempotencyHash"], [requestHash, "requestHash"],
+      [sourceFingerprint, "sourceFingerprint"], [contactFingerprint, "contactFingerprint"],
+    ]) requireSha256(value, field);
+    requireMillis(createdAt, "createdAt");
+    requireMillis(retentionExpiresAt, "retentionExpiresAt");
+    if (retentionExpiresAt <= createdAt || budgetConfirmed !== true) {
+      throw new ServiceError(400, "invalid_pilot_application", "Pilot application retention and budget acknowledgement are invalid");
+    }
+    const sourceHourlyLimit = requirePilotLimit(limits.sourceHourlyLimit ?? 3, "sourceHourlyLimit");
+    const sourceDailyLimit = requirePilotLimit(limits.sourceDailyLimit ?? 10, "sourceDailyLimit");
+    const contactDailyLimit = requirePilotLimit(limits.contactDailyLimit ?? 3, "contactDailyLimit");
+
+    return this.#transaction(async (client) => {
+      await client.query("DELETE FROM pilot_applications WHERE retention_expires_at <= $1", [createdAt]);
+      const lockKeys = [
+        `pilot:contact:${contactFingerprint}`,
+        `pilot:idempotency:${idempotencyHash}`,
+        `pilot:source:${sourceFingerprint}`,
+      ].sort();
+      for (const lockKey of lockKeys) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lockKey]);
+      }
+
+      const existingResult = await client.query(
+        "SELECT * FROM pilot_applications WHERE idempotency_hash = $1",
+        [idempotencyHash],
+      );
+      const existing = normalizeRow(existingResult.rows[0]);
+      if (existing) {
+        if (existing.request_hash !== requestHash) {
+          throw new ServiceError(409, "pilot_idempotency_conflict", "Idempotency key was already used for a different application");
+        }
+        return { replay: true, application: existing };
+      }
+
+      const countsResult = await client.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE source_fingerprint = $1 AND created_at >= $3)::integer AS source_hourly,
+          COUNT(*) FILTER (WHERE source_fingerprint = $1 AND created_at >= $4)::integer AS source_daily,
+          COUNT(*) FILTER (WHERE contact_fingerprint = $2 AND created_at >= $4)::integer AS contact_daily
+        FROM pilot_applications
+        WHERE (source_fingerprint = $1 AND created_at >= $4)
+           OR (contact_fingerprint = $2 AND created_at >= $4)
+      `, [sourceFingerprint, contactFingerprint, createdAt - 3_600_000, createdAt - 86_400_000]);
+      const counts = countsResult.rows[0];
+      if (
+        Number(counts.source_hourly) >= sourceHourlyLimit
+        || Number(counts.source_daily) >= sourceDailyLimit
+        || Number(counts.contact_daily) >= contactDailyLimit
+      ) {
+        throw new ServiceError(429, "pilot_application_rate_limited", "Too many pilot applications; try again later");
+      }
+
+      const inserted = await client.query(`
+        INSERT INTO pilot_applications(
+          id, idempotency_hash, request_hash, source_fingerprint, contact_fingerprint,
+          name, email, company, agent_stack, connector, action_text, timeline,
+          budget_confirmed, status, created_at, updated_at, retention_expires_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+          TRUE, 'received', $13, $13, $14
+        ) RETURNING *
+      `, [
+        id, idempotencyHash, requestHash, sourceFingerprint, contactFingerprint,
+        name, email, company, agentStack, connector, action, timeline,
+        createdAt, retentionExpiresAt,
+      ]);
+      return { replay: false, application: normalizeRow(inserted.rows[0]) };
+    });
+  }
+
+  async listPilotApplications({ status, limit = 50, cursor, now = Date.now() } = {}) {
+    requireMillis(now, "now");
+    requirePilotLimit(limit, "limit", 100);
+    if (status !== undefined && !PILOT_APPLICATION_STATUSES.has(status)) {
+      throw new ServiceError(400, "invalid_pilot_application_query", "Unknown pilot application status");
+    }
+    await this.purgeExpiredPilotApplications(now);
+    const where = ["retention_expires_at > $1"];
+    const values = [now];
+    if (status !== undefined) {
+      values.push(status);
+      where.push(`status = $${values.length}`);
+    }
+    if (cursor !== undefined) {
+      validatePilotCursor(cursor);
+      values.push(cursor.createdAt);
+      const createdIndex = values.length;
+      values.push(cursor.id);
+      const idIndex = values.length;
+      where.push(`(created_at < $${createdIndex} OR (created_at = $${createdIndex} AND id < $${idIndex}))`);
+    }
+    values.push(limit + 1);
+    const result = await this.pool.query(`
+      SELECT * FROM pilot_applications
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${values.length}
+    `, values);
+    const rows = result.rows.map(normalizeRow);
+    return { applications: rows.slice(0, limit), hasMore: rows.length > limit };
+  }
+
+  async reviewPilotApplication({ applicationId, status, adminNote, adminNoteProvided = false, reviewedAt = Date.now() }) {
+    requireNonEmptyString(applicationId, "applicationId");
+    requireMillis(reviewedAt, "reviewedAt");
+    if (!PILOT_APPLICATION_STATUSES.has(status)) {
+      throw new ServiceError(400, "invalid_pilot_application_review", "Unknown pilot application status");
+    }
+    if (adminNoteProvided && adminNote !== null && typeof adminNote !== "string") {
+      throw new ServiceError(400, "invalid_pilot_application_review", "adminNote must be text or null");
+    }
+    return this.#transaction(async (client) => {
+      await client.query("DELETE FROM pilot_applications WHERE retention_expires_at <= $1", [reviewedAt]);
+      const currentResult = await client.query(
+        "SELECT * FROM pilot_applications WHERE id = $1 FOR UPDATE",
+        [applicationId],
+      );
+      const current = normalizeRow(currentResult.rows[0]);
+      if (!current) throw new ServiceError(404, "pilot_application_not_found", "Pilot application does not exist");
+      if (reviewedAt < current.created_at) {
+        throw new ServiceError(400, "invalid_pilot_application_review", "Review time precedes the application");
+      }
+      const updated = await client.query(`
+        UPDATE pilot_applications
+        SET status = $1,
+            admin_note = CASE WHEN $2::boolean THEN $3 ELSE admin_note END,
+            reviewed_at = $4, updated_at = $4
+        WHERE id = $5 RETURNING *
+      `, [status, adminNoteProvided, adminNote ?? null, reviewedAt, applicationId]);
+      return normalizeRow(updated.rows[0]);
+    });
+  }
+
+  async pilotApplicationSummary({ now = Date.now() } = {}) {
+    requireMillis(now, "now");
+    return this.#transaction(async (client) => {
+      await client.query("DELETE FROM pilot_applications WHERE retention_expires_at <= $1", [now]);
+      const countsResult = await client.query(`
+        SELECT status, COUNT(*)::integer AS count FROM pilot_applications
+        WHERE retention_expires_at > $1 GROUP BY status
+      `, [now]);
+      const newestResult = await client.query(`
+        SELECT id AS application_id, created_at, status FROM pilot_applications
+        WHERE retention_expires_at > $1 ORDER BY created_at DESC, id DESC LIMIT 1
+      `, [now]);
+      const countsByStatus = Object.fromEntries([...PILOT_APPLICATION_STATUSES].map((value) => [value, 0]));
+      for (const row of countsResult.rows) countsByStatus[row.status] = Number(row.count);
+      const totalActive = countsResult.rows.reduce((total, row) => total + Number(row.count), 0);
+      return { totalActive, countsByStatus, newest: normalizeRow(newestResult.rows[0]) ?? null };
+    });
+  }
+
+  async purgeExpiredPilotApplications(now = Date.now()) {
+    requireMillis(now, "now");
+    const result = await this.pool.query("DELETE FROM pilot_applications WHERE retention_expires_at <= $1", [now]);
+    return result.rowCount;
   }
 
   async insertChallenge(challenge) {

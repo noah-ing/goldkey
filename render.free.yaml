@@ -38,3 +38,13 @@ services:
         sync: false
       - key: DEV_AUTH_BYPASS
         value: "false"
+      - key: PILOT_APPLICATIONS_ENABLED
+        value: "true"
+      - key: PILOT_ADMIN_TOKEN_SHA256
+        sync: false
+      - key: PILOT_ABUSE_SECRET
+        sync: false
+      - key: PILOT_EDGE_SECRET
+        sync: false
+      - key: PILOT_RETENTION_DAYS
+        value: "90"

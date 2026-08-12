@@ -9,6 +9,7 @@ import { buildOpenApi } from "./openapi.mjs";
 
 const VERSION = "1.0.0";
 const MAX_JSON_BYTES = 64 * 1024;
+const MAX_PILOT_BYTES = 16 * 1024;
 const MAX_PROXY_BYTES = 1024 * 1024;
 const SUPPLY_CACHE_MS = 5_000;
 const DISTRIBUTION_ASSETS = new Map([
@@ -27,10 +28,12 @@ function json(value, status = 200, headers = {}) {
   });
 }
 
-function withPublicHeaders(response, requestId) {
+function withPublicHeaders(response, requestId, { cors = true } = {}) {
   const headers = new Headers(response.headers);
-  headers.set("access-control-allow-origin", "*");
-  headers.set("access-control-expose-headers", "payment-required,payment-response,x-goldkey-idempotent-replay,x-request-id");
+  if (cors) headers.set("access-control-allow-origin", "*");
+  else headers.delete("access-control-allow-origin");
+  if (cors) headers.set("access-control-expose-headers", "payment-required,payment-response,x-goldkey-idempotent-replay,x-request-id");
+  else headers.delete("access-control-expose-headers");
   headers.set("referrer-policy", "no-referrer");
   headers.set("x-content-type-options", "nosniff");
   headers.set("x-request-id", requestId);
@@ -52,7 +55,7 @@ async function parseJson(request, limit = MAX_JSON_BYTES) {
   }
 }
 
-function proxyRoute(pathname, method, guardEnabled = false) {
+function proxyRoute(pathname, method, guardEnabled = false, pilotApplicationsEnabled = false) {
   const allowed = new Map([
     ["/v1/auth/challenge", ["POST"]],
     ["/v1/auth/verify", ["POST"]],
@@ -61,6 +64,7 @@ function proxyRoute(pathname, method, guardEnabled = false) {
     ["/v1/paygo/execute", ["POST"]],
     ["/v1/action-gate", ["POST"]],
   ]);
+  if (pilotApplicationsEnabled) allowed.set("/v1/pilot/applications", ["POST"]);
   if (guardEnabled) {
     allowed.set("/guard/terms", ["GET"]);
     allowed.set("/.well-known/goldkey-guard-keys.json", ["GET"]);
@@ -80,6 +84,10 @@ function proxyRoute(pathname, method, guardEnabled = false) {
   return { known: false, allowed: false, methods: [] };
 }
 
+function isPilotPath(pathname) {
+  return pathname === "/v1/pilot" || pathname.startsWith("/v1/pilot/");
+}
+
 function isGuardPath(pathname) {
   return pathname === "/guard"
     || pathname.startsWith("/guard/")
@@ -89,29 +97,45 @@ function isGuardPath(pathname) {
     || pathname.startsWith("/v1/guard/");
 }
 
-async function proxyToOrigin(request, env, fetchImpl, { guard = false } = {}) {
+async function proxyToOrigin(request, env, fetchImpl, { guard = false, pilot = false } = {}) {
   const base = originUrl(env);
   const source = new URL(request.url);
   const target = new URL(base);
   target.pathname = source.pathname;
-  target.search = source.search;
+  target.search = pilot ? "" : source.search;
 
+  const maxBytes = pilot ? MAX_PILOT_BYTES : MAX_PROXY_BYTES;
+  if (pilot) {
+    assert(source.search === "", 400, "invalid_request", "Pilot applications do not accept query parameters");
+    assert(request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/json", 415, "unsupported_media_type", "Pilot applications require application/json");
+    const idempotencyKey = request.headers.get("idempotency-key");
+    assert(typeof idempotencyKey === "string" && idempotencyKey.length >= 16 && idempotencyKey.length <= 128 && /^[\x21-\x7e]+$/.test(idempotencyKey), 400, "invalid_idempotency_key", "Idempotency-Key must contain 16-128 visible ASCII characters");
+  }
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  assert(Number.isFinite(contentLength) && contentLength <= MAX_PROXY_BYTES, 413, "request_too_large", `Proxied request body must not exceed ${MAX_PROXY_BYTES} bytes`);
-  const headers = guard
+  assert(Number.isFinite(contentLength) && contentLength <= maxBytes, 413, "request_too_large", `Proxied request body must not exceed ${maxBytes} bytes`);
+  const headers = pilot
+    ? new Headers([...new Set(["content-type", "idempotency-key"])]
+      .flatMap((name) => request.headers.has(name) ? [[name, request.headers.get(name)]] : []))
+    : guard
     ? new Headers([...new Set(["accept", "content-type", "payment-signature", "x-payment"])]
       .flatMap((name) => request.headers.has(name) ? [[name, request.headers.get(name)]] : []))
     : new Headers(request.headers);
   headers.delete("host");
   headers.delete("content-length");
-  headers.set("x-forwarded-host", source.host);
-  headers.set("x-forwarded-proto", source.protocol.slice(0, -1));
-  headers.set("x-goldkey-edge", "1");
+  if (pilot) {
+    assert(typeof env.PILOT_EDGE_SECRET === "string" && env.PILOT_EDGE_SECRET.length >= 32, 503, "pilot_applications_unavailable", "Pilot applications are temporarily unavailable");
+    headers.set("x-goldkey-pilot-edge", env.PILOT_EDGE_SECRET);
+    headers.set("x-goldkey-client-address", request.headers.get("cf-connecting-ip") || "unknown");
+  } else {
+    headers.set("x-forwarded-host", source.host);
+    headers.set("x-forwarded-proto", source.protocol.slice(0, -1));
+    headers.set("x-goldkey-edge", "1");
+  }
 
   let body;
   if (request.method !== "GET" && request.method !== "HEAD") {
     const bytes = await request.arrayBuffer();
-    assert(bytes.byteLength <= MAX_PROXY_BYTES, 413, "request_too_large", `Proxied request body must not exceed ${MAX_PROXY_BYTES} bytes`);
+    assert(bytes.byteLength <= maxBytes, 413, "request_too_large", `Proxied request body must not exceed ${maxBytes} bytes`);
     body = bytes;
   }
 
@@ -122,7 +146,10 @@ async function proxyToOrigin(request, env, fetchImpl, { guard = false } = {}) {
     throw new EdgeError(502, "origin_unavailable", "The stateful utility origin is unavailable");
   }
 
-  const responseHeaders = new Headers(response.headers);
+  const responseHeaders = pilot
+    ? new Headers([...new Set(["content-type", "retry-after"])]
+      .flatMap((name) => response.headers.has(name) ? [[name, response.headers.get(name)]] : []))
+    : new Headers(response.headers);
   responseHeaders.set("cache-control", "no-store");
   const location = responseHeaders.get("location");
   if (location) {
@@ -180,10 +207,24 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
     const method = request.method.toUpperCase();
     const pathname = url.pathname;
     const guardEnabled = isGuardEnabled(env);
+    const pilotApplicationsEnabled = env.PILOT_APPLICATIONS_ENABLED === "true";
 
     if (method === "OPTIONS") {
+      if (isPilotPath(pathname)) {
+        if (!pilotApplicationsEnabled || pathname !== "/v1/pilot/applications") {
+          return json({ error: { code: "not_found", message: "Route not found" } }, 404, { "cache-control": "no-store" });
+        }
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "access-control-allow-methods": "POST,OPTIONS",
+            "access-control-allow-headers": "content-type,idempotency-key",
+            "access-control-max-age": "86400",
+          },
+        });
+      }
       if (isGuardPath(pathname)) {
-        const guardProxy = proxyRoute(pathname, method, guardEnabled);
+        const guardProxy = proxyRoute(pathname, method, guardEnabled, pilotApplicationsEnabled);
         if (!guardEnabled || !guardProxy.known) {
           return json({ error: { code: "not_found", message: "Route not found" } }, 404, { "cache-control": "no-store" });
         }
@@ -221,7 +262,7 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
       return asset(env, request, "/index.html", "text/html; charset=utf-8", {
         headOnly: method === "HEAD",
         headers: {
-          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-H0GDhsuAA5rD3GzGfysXTOIm8HaxJBcb9j0NfAKFK3g='; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
           "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
           "x-frame-options": "DENY",
         },
@@ -312,11 +353,14 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
       return json(metadata, 200, { "cache-control": "public, max-age=60" });
     }
 
-    const proxy = proxyRoute(pathname, method, guardEnabled);
+    const proxy = proxyRoute(pathname, method, guardEnabled, pilotApplicationsEnabled);
     if (proxy.known && !proxy.allowed) {
       return json({ error: { code: "method_not_allowed", message: "Method not allowed" } }, 405, { allow: proxy.methods.join(", ") });
     }
-    if (proxy.allowed) return proxyToOrigin(request, env, fetchImpl, { guard: isGuardPath(pathname) });
+    if (proxy.allowed) return proxyToOrigin(request, env, fetchImpl, {
+      guard: isGuardPath(pathname),
+      pilot: pathname === "/v1/pilot/applications",
+    });
 
     return json({ error: { code: "not_found", message: "Route not found" } }, 404, { "cache-control": "no-store" });
   }
@@ -324,8 +368,9 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
   return {
     async fetch(request, env = {}) {
       const requestId = crypto.randomUUID();
+      const cors = !isPilotPath(new URL(request.url).pathname);
       try {
-        return withPublicHeaders(await route(request, env), requestId);
+        return withPublicHeaders(await route(request, env), requestId, { cors });
       } catch (error) {
         if (error instanceof EdgeError) {
           return withPublicHeaders(json({
@@ -335,9 +380,9 @@ export function createWorker({ fetchImpl = fetch, clock = () => Date.now() } = {
               ...(error.details === undefined ? {} : { details: error.details }),
             },
             request_id: requestId,
-          }, error.status, { "cache-control": "no-store" }), requestId);
+          }, error.status, { "cache-control": "no-store" }), requestId, { cors });
         }
-        return withPublicHeaders(json({ error: { code: "internal_error", message: "Internal edge error" }, request_id: requestId }, 500, { "cache-control": "no-store" }), requestId);
+        return withPublicHeaders(json({ error: { code: "internal_error", message: "Internal edge error" }, request_id: requestId }, 500, { "cache-control": "no-store" }), requestId, { cors });
       }
     },
   };
