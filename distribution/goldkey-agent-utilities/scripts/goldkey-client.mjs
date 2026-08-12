@@ -370,6 +370,12 @@ function accessToken(env) {
   return value;
 }
 
+function requireCanonicalWalletAuthentication(context) {
+  if (!context.runtime.canonical) {
+    fail("Refusing wallet authentication against a noncanonical development origin");
+  }
+}
+
 async function readSignatureFromStdin(stream = process.stdin) {
   if (stream.isTTY) fail("Inject GOLDKEY_WALLET_SIGNATURE through the secret store or provide the signature on standard input");
   let value = "";
@@ -475,12 +481,14 @@ export async function run(argv, options = {}) {
     return request("/v1/renewal/quote", { method: "POST", body, validateAs: "renewal" }, context);
   }
   if (command === "challenge") {
+    requireCanonicalWalletAuthentication(context);
     return request("/v1/auth/challenge", {
       method: "POST",
       body: { token_id: required(flags, "token-id"), wallet: required(flags, "wallet") },
     }, context);
   }
   if (command === "verify") {
+    requireCanonicalWalletAuthentication(context);
     return request("/v1/auth/verify", {
       method: "POST",
       body: { challenge_id: required(flags, "challenge-id"), signature: await walletSignature(flags, env, readStdinImpl) },

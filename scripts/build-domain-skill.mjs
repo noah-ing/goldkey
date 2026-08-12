@@ -16,6 +16,8 @@ const schema = "https://schemas.agentskills.io/discovery/0.2.0/schema.json";
 const files = Object.freeze([
   "SKILL.md",
   "agents/openai.yaml",
+  "references/guard-beta.md",
+  "references/pass-and-keys.md",
   "scripts/goldkey-client.mjs",
 ]);
 
@@ -146,4 +148,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const result = await buildDomainSkill();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
-

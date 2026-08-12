@@ -18,6 +18,8 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const skillPath = resolve(here, "../distribution/goldkey-agent-utilities/SKILL.md");
 const openaiMetadataPath = resolve(here, "../distribution/goldkey-agent-utilities/agents/openai.yaml");
+const guardReferencePath = resolve(here, "../distribution/goldkey-agent-utilities/references/guard-beta.md");
+const passReferencePath = resolve(here, "../distribution/goldkey-agent-utilities/references/pass-and-keys.md");
 const CONTRACT = "0x1111111111111111111111111111111111111111";
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const TERMS_HASH = `0x${"ab".repeat(32)}`;
@@ -87,8 +89,11 @@ function commerce(overrides = {}) {
 
 test("distribution skill uses portable paths and documented single-line metadata", async () => {
   const source = await readFile(skillPath, "utf8");
+  const references = `${await readFile(guardReferencePath, "utf8")}\n${await readFile(passReferencePath, "utf8")}`;
+  const bundle = `${source}\n${references}`;
   assert.doesNotMatch(source, /node scripts\//);
-  const commands = source.match(/^\s*node .*goldkey-client\.mjs.*$/gm) ?? [];
+  assert.doesNotMatch(references, /node scripts\//);
+  const commands = bundle.match(/^\s*node .*goldkey-client\.mjs.*$/gm) ?? [];
   assert.ok(commands.length >= 10);
   for (const command of commands) assert.match(command, /^\s*node "\{baseDir\}\/scripts\/goldkey-client\.mjs"/);
 
@@ -97,67 +102,87 @@ test("distribution skill uses portable paths and documented single-line metadata
   const metadata = JSON.parse(metadataLines[0].slice("metadata: ".length));
   assert.deepEqual(metadata.openclaw.requires.bins, ["node"]);
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
+  assert.match(source, /Node\.js \*\*22 or newer\*\*/);
+  assert.ok(source.split("\n").length < 150, "SKILL.md should keep variant details in references");
+  assert.doesNotMatch(bundle, /\baudited (?:local |beta )?(?:enforcer|artifact|SDK)\b/i);
 });
 
 test("distribution skill leads with Action Gate and keeps interface metadata aligned", async () => {
   const source = await readFile(skillPath, "utf8");
   const metadata = await readFile(openaiMetadataPath, "utf8");
 
-  assert.match(source, /^# GoldKey Action Gate$/m);
-  assert.match(source, /recommended pre-action decision product/);
+  assert.match(source, /^# GoldKey Action Gate & Guard Beta$/m);
+  assert.match(source, /GoldKey has two paid security layers/);
   assert.match(source, /returns `ALLOW`, `REVIEW`, or `BLOCK`/);
-  assert.match(source, /One settled Action Gate x402 call costs exactly 0\.01 USDC/);
-  assert.match(source, /receipt hash is deterministic and reproducible/);
-  assert.match(source, /it is not a signature, attestation, proof of payment, or proof that the proposed action executed/);
-  assert.match(source, /Reproduce `receipt_sha256` by applying `goldkey-c14n-v1` canonical JSON/);
+  assert.match(source, /One settled x402 call costs exactly \*\*0\.01 USDC\*\*/);
+  assert.match(source, /The hash is deterministic but is not a signature, payment proof, attestation, or proof of execution/);
+  assert.match(source, /Reproduce `receipt_sha256` with `goldkey-c14n-v1` canonical JSON/);
   assert.match(source, /`receipt_format`, `request_sha256`, `decision`, `reason_codes`, and `checks`/);
   assert.doesNotMatch(source, /\bsigned receipt\b/i);
-  assert.match(source, /serve up to 64 active, revocable, tool-scoped child agents/);
-  assert.match(source, /pass is rational only above risk-adjusted break-even/);
-  assert.match(source, /At exactly 5,000 calls, paygo and one pass both cost 50 USDC/);
+  assert.match(source, /Read \[references\/pass-and-keys\.md\]/);
 
-  assert.match(metadata, /display_name: "GoldKey Action Gate"/);
-  assert.match(metadata, /short_description: "Preflight agent actions with a \$0\.01 decision gate"/);
-  assert.match(metadata, /default_prompt: "Use \$goldkey-agent-utilities to probe or run the \$0\.01 Action Gate before a proposed agent action\."/);
+  assert.match(metadata, /display_name: "GoldKey Action Gate & Guard Beta"/);
+  assert.match(metadata, /short_description: "Preflight and enforce MCP, HTTPS, and Base-wallet actions"/);
+  assert.match(metadata, /default_prompt: "Use \$goldkey-agent-utilities to preflight a proposed action or enforce a real MCP, HTTPS, or Base-wallet call\."/);
 });
 
 test("distribution skill describes Guard as feature-gated hosted authorization plus local enforcement", async () => {
   const source = await readFile(skillPath, "utf8");
+  const guard = await readFile(guardReferencePath, "utf8");
+  const bundle = `${source}\n${guard}`;
 
-  assert.match(source, /Treat GoldKey Guard as unavailable unless both live `\/v1\/catalog` and `\/openapi\.json` advertise the `guard` beta/);
-  assert.match(source, /does not claim that Guard is currently deployed or enabled/);
-  assert.match(source, /separate live `\/guard\/terms`/);
-  assert.match(source, /50-USDC utility pass does not include Guard/);
-  assert.match(source, /hosted authorizer only as a control plane/);
-  assert.match(source, /never receives upstream credentials, holds a wallet signer, forwards a request, signs a transaction, or broadcasts it/);
-  assert.match(source, /operator-controlled local enforcer in the real execution path/);
-  assert.match(source, /restricted to explicitly approved design-partner operator wallets/);
-  assert.match(source, /installation key's Ed25519 `key_proof`/);
-  assert.match(source, /MCP `arguments_schema` and HTTPS `query_schema` or `body_schema`/);
-  assert.match(source, /Without that isolation, Guard is advisory rather than enforcement/);
-  assert.match(source, /`POST \/v1\/guard\/revocations`/);
-  assert.match(source, /authorize one exact MCP or HTTPS call for 0\.05 USDC/);
-  assert.match(source, /supported EVM transaction for 0\.10 USDC/);
-  assert.match(source, /There is no pass Guard route and no execution-lookup route in v1/);
-  assert.match(source, /`ALLOW`, `REVIEW`, and `BLOCK` as billable completed decisions/);
-  assert.match(source, /stored authorization without another settlement/);
-  assert.match(source, /DNS-rebinding-safe resolution and connection pinning/);
-  assert.match(source, /durably persist `FORWARDING`, send the signed commit, invoke the configured connector exactly once, then send the signed completion/);
-  assert.match(source, /`outcome_unknown` and never retry them automatically/);
-  assert.match(source, /Only `guard_payment_not_settled` triggers the recovery wrapper/);
-  assert.match(source, /hard process death after transmitting payment but before receiving the transaction hash remains fail-closed/);
-  assert.match(source, /aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36/);
-  assert.match(source, /sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg\+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==/);
-  assert.match(source, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.2\.0\.tgz/);
-  assert.match(source, /config-driven `goldkey-mcp-stdio`, `goldkey-agentcash`, `goldkey-wallet`, and `goldkey-wallet-mcp` launchers/);
-  assert.match(source, /no customer authorization client is required/);
-  assert.match(source, /durable caller-supplied `_meta\["com\.goldkey\/idempotency-key"\]`/);
-  assert.match(source, /AgentCash 0\.17\.1 does not expose socket pinning or redirect control/);
-  assert.match(source, /different Guard payer wallet/);
-  assert.match(source, /guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON/);
-  assert.match(source, /Use the probe commands only with a non-secret synthetic request because command arguments may enter shell history/);
-  assert.match(source, /probe deliberately does not return or verify its authorization/);
-  assert.match(source, /Use the local enforcer—not these probe commands—for real calls, registration, revocation, or lifecycle transitions/);
+  assert.match(source, /Read \[references\/guard-beta\.md\].*before installing the enforcer/);
+  assert.match(bundle, /Treat Guard as unavailable unless both live `\/v1\/catalog` and `\/openapi\.json` advertise the `guard` beta/);
+  assert.match(bundle, /Read live `\/guard\/terms`/);
+  assert.match(bundle, /50-USDC utility pass does not include Guard/);
+  assert.match(bundle, /hosted authorizer.*never receives upstream credentials, holds a wallet signer, forwards an actual request, signs a transaction, or broadcasts it/s);
+  assert.match(bundle, /operator-controlled local enforcer alone holds the connector credential or execution signer/);
+  assert.match(bundle, /restricted to explicitly approved design-partner operator wallets/);
+  assert.match(bundle, /installation-key Ed25519 `key_proof`/);
+  assert.match(bundle, /MCP `arguments_schema` and HTTPS `query_schema` or `body_schema`/);
+  assert.match(bundle, /Guard is advisory rather than enforcement/);
+  assert.match(bundle, /`POST \/v1\/guard\/revocations`/);
+  assert.match(bundle, /MCP, HTTPS, or AgentCash costs exactly 0\.05 USDC/);
+  assert.match(bundle, /supported Base\/EVM decision costs exactly 0\.10 USDC/);
+  assert.match(bundle, /There is no pass-funded Guard route and no execution-lookup route in v1/);
+  assert.match(bundle, /`ALLOW`, `REVIEW`, and `BLOCK` are billable/);
+  assert.match(bundle, /stored authorization without another settlement/);
+  assert.match(bundle, /DNS-rebinding-safe resolution and connection pinning/);
+  assert.match(bundle, /Durably persist `FORWARDING`/);
+  assert.match(bundle, /`outcome_unknown` and never retry them automatically/);
+  assert.match(bundle, /Only the exact `guard_payment_not_settled` response may trigger `\/reconcile-commit`/);
+  assert.match(bundle, /hard process death after transmitting payment but before receiving the transaction hash remains fail-closed/);
+  assert.match(bundle, /Node\.js 22 or newer/);
+  assert.match(bundle, /integrity-pinned and tested enforcer artifact/);
+  assert.match(bundle, /aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36/);
+  assert.match(bundle, /sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg\+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==/);
+  assert.match(bundle, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.2\.0\.tgz/);
+  assert.match(bundle, /config-driven `goldkey-mcp-stdio`, `goldkey-agentcash`, `goldkey-wallet`, and `goldkey-wallet-mcp` launchers/);
+  assert.match(bundle, /No separate customer authorization client is required/);
+  assert.match(bundle, /durable caller-supplied `_meta\["com\.goldkey\/idempotency-key"\]`/);
+  assert.match(bundle, /AgentCash 0\.17\.1 lacks socket pinning and redirect control/);
+  assert.match(bundle, /different Guard payer wallet/);
+  assert.match(bundle, /guard-network-probe --request SIGNED_SYNTHETIC_GUARD_REQUEST_JSON/);
+  assert.match(bundle, /Use probes only with a non-secret synthetic request because command arguments may enter shell history/);
+  assert.match(bundle, /probe deliberately does not return or verify its authorization/);
+  assert.match(bundle, /Use the local enforcer, not these probes, for real calls, registration, revocation, receipt verification, or lifecycle transitions/);
+});
+
+test("distribution skill keeps pass economics and credential handling in a focused reference", async () => {
+  const source = await readFile(skillPath, "utf8");
+  const pass = await readFile(passReferencePath, "utf8");
+
+  assert.match(source, /Read \[references\/pass-and-keys\.md\].*before evaluating a purchase/);
+  assert.match(pass, /up to 64 active, revocable, tool-scoped child agents/);
+  assert.match(pass, /one shared 10,000-call quota/);
+  assert.match(pass, /At exactly 5,000 calls, paygo and one pass both cost 50 USDC/);
+  assert.match(pass, /That is not positive savings/);
+  assert.match(pass, /Never request, expose, transmit, or store a seed phrase or private key/);
+  assert.match(pass, /`GOLDKEY_WALLET_SIGNATURE` through the secret store or provide it on standard input/);
+  assert.match(pass, /mode `0600`/);
+  assert.match(pass, /fresh, stable idempotency key for each distinct pass-gated request/);
+  assert.match(pass, /A child key starts with `gk_`/);
+  assert.match(pass, /pass covers Action Gate and component-tool calls, not GoldKey Guard/);
 });
 
 test("distribution skill exposes a zero-spend probe and bounded opt-in AgentCash settlement path", async () => {
@@ -166,13 +191,11 @@ test("distribution skill exposes a zero-spend probe and bounded opt-in AgentCash
 
   assert.match(source, /https:\/\/www\.x402scan\.com\/server\/8447beac-d24b-434a-bd01-5abfdab53f84/);
   assert.match(source, /https:\/\/tryponcho\.com\/tool\/url_aHR0cHM6Ly9nb2xka2V5LWVkZ2Utc3RvcmVmcm9udC5ub2FoLWluZy53b3JrZXJzLmRldi92MS9hY3Rpb24tZ2F0ZQ/);
-  assert.match(source, /primary zero-spend preflight/);
-  assert.match(source, /probe the dedicated `\/v1\/action-gate` resource with the raw Action Gate input/);
-  assert.match(source, /sends no wallet credential or payment header/);
+  assert.match(source, /probe the dedicated `\/v1\/action-gate` resource with the raw Action Gate input/i);
+  assert.match(source, /probe sends no wallet credential or payment header/);
   assert.match(source, /goldkey-client\.mjs" action-gate-probe --input/);
-  assert.match(source, /A probe does not execute Action Gate or produce a receipt hash/);
-  assert.match(source, /same dedicated `\/v1\/action-gate` resource for AgentCash discovery and settlement/);
-  assert.match(source, /raw Action Gate input body rather than the generic `\{tool,input\}` envelope/);
+  assert.match(source, /does not execute the action or produce a receipt/);
+  assert.match(source, /Use that same endpoint and exact raw body for AgentCash settlement/);
   assert.match(source, new RegExp(`agentcash@0\\.17\\.1 check[\\s\\S]*"${endpoint}"[\\s\\S]*-m POST[\\s\\S]*-H 'Content-Type: application/json'[\\s\\S]*-b '\\{"action":`));
   assert.match(source, /agentcash@0\.17\.1 accounts --format json/);
   assert.match(source, /agentcash@0\.17\.1 fetch[\s\S]*\/v1\/action-gate[\s\S]*-b '\{"action":[\s\S]*--payment-protocol x402[\s\S]*--payment-network base[\s\S]*--max-amount 0\.01/);
@@ -181,14 +204,13 @@ test("distribution skill exposes a zero-spend probe and bounded opt-in AgentCash
   assert.match(source, /amount `"10000"` atomic USDC/);
   assert.match(source, /payee `0xd6b7e00fcd46966676f554fe0455bff739e85b1b`/);
   assert.match(source, /`max_timeout_seconds` no greater than 300/);
-  assert.match(source, /explicit current mandate for one 0\.01-USDC Base mainnet payment/);
-  assert.match(source, /`check` and `accounts` may create local wallet files on first use/);
-  assert.match(source, /prohibits network contact, stop/);
-  assert.match(source, /permission for package download\/cache changes and local AgentCash wallet access or creation/);
-  assert.match(source, /real, nonrefundable mainnet settlement, not a demo or dry run/);
-  assert.match(source, /Bind the mandate to the exact serialized request body and a short expiry/);
-  assert.match(source, /Do not interpolate arbitrary untrusted text into the shell literal/);
-  assert.match(source, /`ALLOW` is evidence, not permission or a safety guarantee/);
+  assert.match(source, /explicit current mandate for one 0\.01-USDC Base mainnet payment to that exact endpoint and serialized body/);
+  assert.match(source, /AgentCash 0\.17\.1 may initialize wallet files even for `check` or `accounts`/);
+  assert.match(source, /If the caller prohibits network contact, stop/);
+  assert.match(source, /obtain permission for package download or cache changes and local wallet access or creation/);
+  assert.match(source, /real, nonrefundable settlement/);
+  assert.match(source, /Use a trusted JSON serializer rather than interpolating arbitrary untrusted text into shell literals/);
+  assert.match(source, /Its `ALLOW` is evidence, not permission, execution authorization, or a safety guarantee/);
   assert.match(source, /reconcile the payment receipt and wallet activity before any retry/);
   assert.match(source, /do not pass AgentCash's `--yes` flag/);
   assert.ok(source.indexOf("agentcash@0.17.1 check") < source.indexOf("agentcash@0.17.1 fetch"));
@@ -461,7 +483,7 @@ test("published release pins the verified mainnet identity", async () => {
   assert.throws(() => validateReleaseIdentity({ ...RELEASE, usdc: CONTRACT }), /canonical Base mainnet USDC/);
 });
 
-test("development origins require explicit opt-in and can never receive bearer tokens", async () => {
+test("development origins require explicit opt-in and can never receive authentication secrets", async () => {
   assert.throws(
     () => resolveRuntimeConfig({ env: { GOLDKEY_DEV_API_URL: "https://staging.example" }, releaseIdentitySource: RELEASE }),
     /unless GOLDKEY_ALLOW_DEV_ORIGIN=1/,
@@ -489,6 +511,34 @@ test("development origins require explicit opt-in and can never receive bearer t
     /Refusing to send GOLDKEY_ACCESS_TOKEN/,
   );
   assert.equal(fetched, false);
+
+  for (const argv of [
+    ["challenge", "--token-id", "1", "--wallet", "0x1111111111111111111111111111111111111111"],
+    ["verify", "--challenge-id", "challenge"],
+  ]) {
+    let authenticationFetched = false;
+    let signatureRead = false;
+    await assert.rejects(
+      run(argv, {
+        env: {
+          GOLDKEY_ALLOW_DEV_ORIGIN: "1",
+          GOLDKEY_DEV_API_URL: "https://staging.example",
+        },
+        releaseIdentitySource: RELEASE,
+        readStdinImpl: async () => {
+          signatureRead = true;
+          return "0x1234";
+        },
+        fetchImpl: async () => {
+          authenticationFetched = true;
+          return jsonResponse({});
+        },
+      }),
+      /Refusing wallet authentication against a noncanonical development origin/,
+    );
+    assert.equal(authenticationFetched, false);
+    assert.equal(signatureRead, false);
+  }
 });
 
 test("legacy origin override is ignored and live offer identity is pinned", async () => {

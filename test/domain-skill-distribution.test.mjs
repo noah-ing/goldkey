@@ -14,6 +14,8 @@ const outputDirectory = resolve(root, "edge/public/.well-known/agent-skills");
 const expectedFiles = [
   "SKILL.md",
   "agents/openai.yaml",
+  "references/guard-beta.md",
+  "references/pass-and-keys.md",
   "scripts/goldkey-client.mjs",
 ];
 
@@ -45,7 +47,7 @@ function readTar(archive) {
   return entries;
 }
 
-test("domain skill index pins a deterministic archive with only audited files", async () => {
+test("domain skill index pins a deterministic archive with only approved files", async () => {
   const first = await buildDomainSkill();
   assert.equal(first.archiveChanged, false, "generated skill archive is stale; run scripts/build-domain-skill.mjs and commit it");
   assert.equal(first.indexChanged, false, "generated skill index is stale; run scripts/build-domain-skill.mjs and commit it");
@@ -65,7 +67,7 @@ test("domain skill index pins a deterministic archive with only audited files", 
     skills: [{
       name: "goldkey-agent-utilities",
       type: "archive",
-      description: "Run GoldKey Action Gate before proposed agent actions to obtain ALLOW, REVIEW, or BLOCK with a deterministic, reproducible receipt hash, or use its component JSON, prompt, URL, spend, and Unicode checks. When live discovery explicitly advertises it, integrate the feature-gated GoldKey Guard beta as a paid hosted authorizer plus operator-controlled local enforcer for real MCP, HTTPS, or supported EVM calls. Use for exact 0.01-USDC pre-action decisions, zero-spend x402 probes, pass-versus-paygo evaluation, Guard enforcement, or GoldKey pass, renewal, authentication, quota, and scoped child-key operations.",
+      description: "Preflight proposed agent actions with GoldKey Action Gate for a deterministic ALLOW, REVIEW, or BLOCK receipt, or integrate the feature-gated GoldKey Guard beta as an operator-controlled enforcement path for actual MCP, HTTPS, AgentCash, or supported Base/EVM calls. Use for x402-paid action screening, policy enforcement before tool calls or wallet transactions, Guard installation and recovery, component JSON, prompt, URL, spend, and Unicode checks, pass-versus-paygo decisions, or GoldKey pass authentication, quota, and scoped child-key operations.",
       url: "./goldkey-agent-utilities.tar.gz",
       digest: `sha256:${sha256(firstArchive)}`,
     }],
