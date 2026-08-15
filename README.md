@@ -20,7 +20,9 @@ GoldKey also offers a fixed-fee **$10,000 guarded integration pilot** for teams 
 
 The pilot includes a threat model, immutable operator policy, a customer-controlled local enforcement path, adversarial allow/deny/replay/drift tests, an evidence package, and an operational handoff. A smaller $1,000 control-design sprint is available when the integration boundary is not yet ready to implement.
 
-See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria, exclusions, and commercial terms. No work begins without written authorization and a funded milestone.
+See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria, exclusions, and commercial terms, then use the [private pilot application](https://goldkey-edge-storefront.noah-ing.workers.dev/#pilot-application) to describe one concrete workflow and connector. No work begins without written authorization and a funded milestone.
+
+GoldKey's four live x402 resources are independently indexed on [x402scan](https://www.x402scan.com/server/8447beac-d24b-434a-bd01-5abfdab53f84), including the Action Gate, Agent Utilities, Network Authorization, and EVM Authorization endpoints.
 
 ## What is included
 
