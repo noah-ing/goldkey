@@ -14,6 +14,14 @@ The NFT is not sold on a speculative story. It is the transferable settlement ob
 
 The 500,000-USDC figure is the maximum gross from first mints, not a sales forecast and not a cap on total revenue. Renewal and paygo revenue are separate and are not supply-capped. The commercial bottleneck is distribution to agents that genuinely exceed 5,000 eligible calls per term.
 
+## Paid security integration
+
+GoldKey also offers a fixed-fee **$10,000 guarded integration pilot** for teams preparing to let one AI-agent workflow call a privileged MCP tool, HTTPS operation, or supported Base/EVM wallet action. The engagement is delivered in two independently accepted $5,000 milestones and is limited to a customer-owned staging environment, one workflow, and one connector path.
+
+The pilot includes a threat model, immutable operator policy, a customer-controlled local enforcement path, adversarial allow/deny/replay/drift tests, an evidence package, and an operational handoff. A smaller $1,000 control-design sprint is available when the integration boundary is not yet ready to implement.
+
+See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria, exclusions, and commercial terms. No work begins without written authorization and a funded milestone.
+
 ## What is included
 
 - Fixed 50-USDC, 10,000-supply ERC-721 contract

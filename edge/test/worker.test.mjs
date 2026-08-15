@@ -192,6 +192,9 @@ test("root storefront serves the honest Guard founding offer for exact GET and H
   assert.match(html, /Founding design-partner beta/i);
   assert.match(html, /No receipt[\s\S]*No execution/i);
   assert.match(html, /\$1,000/);
+  assert.match(html, /\$10,000/);
+  assert.match(html, /Two independently accepted \$5,000 milestones/i);
+  assert.match(html, /Guarded integration:/i);
   assert.match(html, /\$0\.05/);
   assert.match(html, /\$0\.10/);
   assert.match(html, /must have no direct credential, signer, or network route that bypasses the local enforcer/i);

@@ -391,7 +391,7 @@
 
     .price-layout {
       display: grid;
-      grid-template-columns: 1fr 1.35fr;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 24px;
       align-items: stretch;
     }
@@ -437,7 +437,7 @@
     .included li::before { content: "+"; position: absolute; left: 0; color: var(--gold); }
     .pilot-card .button { margin-top: auto; }
 
-    .meter-card { display: grid; grid-template-rows: 1fr 1fr auto; overflow: hidden; }
+    .meter-card { display: grid; grid-column: 1 / -1; grid-template-rows: 1fr 1fr auto; overflow: hidden; }
     .meter { display: grid; grid-template-columns: 1fr auto; gap: 28px; align-items: center; padding: 34px; border-bottom: 1px solid var(--soft-line); }
     .meter h3 { margin: 0 0 7px; }
     .meter p { margin: 0; color: var(--muted); font-size: 13px; }
@@ -683,7 +683,7 @@
         <h1>No receipt.<br>No execution.</h1>
         <p>GoldKey Guard puts operator-controlled policy in the real execution path of an AI agent. Install a config-driven local MCP, AgentCash, or Base-wallet enforcer; the exact proposed call runs only after it verifies a signed, short-lived ALLOW receipt.</p>
         <div class="actions">
-          <a class="button primary" href="#pilot-application">Start a $1,000 pilot&nbsp; →</a>
+          <a class="button primary" href="#pilot-application">Scope a guarded integration&nbsp; →</a>
           <a class="button" href="/openapi.json">Inspect the live API</a>
         </div>
         <p class="hero-note">Apply privately below. No payment is collected with your application.</p>
@@ -781,21 +781,34 @@
           <p class="eyebrow">Founding offer</p>
           <h2 id="pricing-title">Pay for a real control point, not another dashboard.</h2>
         </div>
-        <p class="section-intro">Founding design partners get a scoped implementation pilot. Authorization usage is metered from the first real call.</p>
+        <p class="section-intro">Start with a bounded control-design sprint or take one staging workflow through a complete guarded integration. Authorization usage is metered from the first real call.</p>
       </div>
 
       <div class="price-layout">
         <article class="pilot-card">
-          <span class="price-label">Implementation pilot</span>
+          <span class="price-label">Control-design sprint</span>
           <div class="price">$1,000</div>
-          <div class="price-sub">One-time founding design-partner fee</div>
+          <div class="price-sub">A bounded paid scoping engagement</div>
           <ul class="included">
-            <li>One environment</li>
-            <li>One connector path</li>
-            <li>One initial operator policy</li>
-            <li>Up to two hours of implementation support</li>
+            <li>One workflow threat model</li>
+            <li>One connector and credential boundary</li>
+            <li>Draft operator policy and acceptance plan</li>
+            <li>One technical review session</li>
           </ul>
-          <a class="button primary" href="#pilot-application">Apply for the pilot&nbsp; →</a>
+          <a class="button" href="#pilot-application">Apply for the sprint&nbsp; →</a>
+        </article>
+
+        <article class="pilot-card">
+          <span class="price-label">Guarded integration pilot</span>
+          <div class="price">$10,000</div>
+          <div class="price-sub">Two independently accepted $5,000 milestones</div>
+          <ul class="included">
+            <li>Threat model and immutable policy</li>
+            <li>One customer-owned staging integration</li>
+            <li>Fail-closed adversarial A/B evidence</li>
+            <li>Runbook, walkthrough, and correction round</li>
+          </ul>
+          <a class="button primary" href="#pilot-application">Apply for the integration&nbsp; →</a>
         </article>
 
         <article class="meter-card" aria-label="Authorization usage prices">
@@ -823,7 +836,7 @@
         <div class="application-copy">
           <p class="eyebrow">Private pilot application</p>
           <h2 id="application-title">Start with one action that matters.</h2>
-          <p class="section-intro">Tell us where the agent acts, what it can reach, and the exact operation you need enforced. We use this only to assess and respond to your pilot inquiry.</p>
+          <p class="section-intro">Tell us where the agent acts, what it can reach, and the exact operation you need enforced. Start the action description with <strong>Design sprint:</strong> or <strong>Guarded integration:</strong> to identify the engagement. We use this only to assess and respond to your inquiry.</p>
         </div>
 
         <form class="application-form" id="pilot-form" action="/v1/pilot/applications" method="post">
@@ -865,7 +878,7 @@
             <div class="field-wide">
               <label class="check-field" for="pilot-budget">
                 <input id="pilot-budget" name="budget_confirmed" type="checkbox" required>
-                <span>I understand that, if accepted, the founding implementation pilot costs $1,000 plus metered authorization usage. No payment is due with this application.</span>
+                <span>I understand that the design sprint is $1,000 and the full guarded integration is $10,000, each plus metered authorization usage if enabled. No payment is due with this application.</span>
               </label>
             </div>
           </div>
