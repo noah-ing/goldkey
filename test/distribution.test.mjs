@@ -154,9 +154,9 @@ test("distribution skill describes Guard as feature-gated hosted authorization p
   assert.match(bundle, /hard process death after transmitting payment but before receiving the transaction hash remains fail-closed/);
   assert.match(bundle, /Node\.js 22 or newer/);
   assert.match(bundle, /integrity-pinned and tested enforcer artifact/);
-  assert.match(bundle, /aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36/);
-  assert.match(bundle, /sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg\+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==/);
-  assert.match(bundle, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.2\.0\.tgz/);
+  assert.match(bundle, /62dbeb10684e075a9ca7d08862eaa99b30f2c2f958bba3f9cc8ecbd7c212d3e5/);
+  assert.match(bundle, /sha512-y0qBohVxB\/5F9DkzXBDKeerlpudXlpHaewj7D4coqLyC9IbBbH7vtZ1bBYyck31hdXiTaNTQOYvwAa\/enm54wQ==/);
+  assert.match(bundle, /npm install --ignore-scripts \/absolute\/private\/goldkey-enforcer-0\.2\.1\.tgz/);
   assert.match(bundle, /config-driven `goldkey-mcp-stdio`, `goldkey-agentcash`, `goldkey-wallet`, and `goldkey-wallet-mcp` launchers/);
   assert.match(bundle, /No separate customer authorization client is required/);
   assert.match(bundle, /durable caller-supplied `_meta\["com\.goldkey\/idempotency-key"\]`/);

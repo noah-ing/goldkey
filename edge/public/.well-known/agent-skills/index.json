@@ -6,7 +6,7 @@
       "type": "archive",
       "description": "Preflight proposed agent actions with GoldKey Action Gate for a deterministic ALLOW, REVIEW, or BLOCK receipt, or integrate the feature-gated GoldKey Guard beta as an operator-controlled enforcement path for actual MCP, HTTPS, AgentCash, or supported Base/EVM calls. Use for x402-paid action screening, policy enforcement before tool calls or wallet transactions, Guard installation and recovery, component JSON, prompt, URL, spend, and Unicode checks, pass-versus-paygo decisions, or GoldKey pass authentication, quota, and scoped child-key operations.",
       "url": "./goldkey-agent-utilities.tar.gz",
-      "digest": "sha256:2805deb195f6518aa3da36da90eeba68a0bfa7bf683b97f80edb77b6eacca5b6"
+      "digest": "sha256:c59f7431bf0f6b3b7e1d652731c36a6d156a8436427df4ea7db906b297728f4e"
     }
   ]
 }

@@ -57,17 +57,17 @@ Require Node.js 22 or newer. Obtain authorization before downloading or installi
 The integrity-pinned and tested enforcer artifact is:
 
 - Package: `@goldkey/enforcer`
-- Version: `0.2.0`
-- Size: `119159` bytes
-- SHA-256: `aeb3d11c02a1ac15ebc8a9c4541b9ca481a32fe1ac23b8668d99ffb88487fe36`
-- SHA-512 SRI: `sha512-DeHLvAITG9dZ8amUbctB0ppDcq1Is8wbGIg+uz98hJxYnFy0ZUDqkfZkXpWc3gXomTH32KJfbJUoYyBZyoVkVg==`
-- Manifest: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json`
-- Artifact: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz`
+- Version: `0.2.1`
+- Size: `120073` bytes
+- SHA-256: `62dbeb10684e075a9ca7d08862eaa99b30f2c2f958bba3f9cc8ecbd7c212d3e5`
+- SHA-512 SRI: `sha512-y0qBohVxB/5F9DkzXBDKeerlpudXlpHaewj7D4coqLyC9IbBbH7vtZ1bBYyck31hdXiTaNTQOYvwAa/enm54wQ==`
+- Manifest: `https://github.com/noah-ing/goldkey/releases/download/v0.2.1/goldkey-enforcer-0.2.1.tgz.integrity.json`
+- Artifact: `https://github.com/noah-ing/goldkey/releases/download/v0.2.1/goldkey-enforcer-0.2.1.tgz`
 
 Fetch the manifest and artifact without executing either. Require every manifest value above, compute SHA-256 over the downloaded tarball bytes, and compare before installing the local file with lifecycle scripts disabled:
 
 ```sh
-npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.2.0.tgz
+npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.2.1.tgz
 ```
 
 Read the artifact's bundled README and packaged examples before configuration. Do not use an artifact whose size, package, version, SHA-256, or SRI differs from the values above.

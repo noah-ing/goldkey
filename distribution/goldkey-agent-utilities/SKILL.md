@@ -79,7 +79,7 @@ Preserve `request_sha256`, `receipt_sha256`, decision, reason codes, checks, and
 
 ## Integrate Guard beta
 
-Read [references/guard-beta.md](references/guard-beta.md) in full before installing the enforcer, registering policy, authorizing a real call, operating an adapter, or recovering lifecycle state. It contains the exact feature-gated routes, integrity-pinned and tested enforcer 0.2.0 hashes, exclusive-path requirements, DNS-rebinding controls, EVM decoding and simulation rules, adapter limits, receipt verification, and recovery procedure.
+Read [references/guard-beta.md](references/guard-beta.md) in full before installing the enforcer, registering policy, authorizing a real call, operating an adapter, or recovering lifecycle state. It contains the exact feature-gated routes, integrity-pinned and tested enforcer 0.2.1 hashes, exclusive-path requirements, DNS-rebinding controls, EVM decoding and simulation rules, adapter limits, receipt verification, and recovery procedure.
 
 At minimum, require both live `/v1/catalog` and `/openapi.json` to advertise Guard and read `/guard/terms`. Registration is limited to approved design-partner operator wallets. The hosted authorizer is a control plane only: it never holds upstream credentials or a wallet signer and never forwards, signs, or broadcasts the actual call. The local enforcer must be the only execution path and must forward only an unexpired, locally verified `ALLOW`.
 

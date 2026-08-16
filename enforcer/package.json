@@ -1,6 +1,6 @@
 {
   "name": "@goldkey/enforcer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "description": "Local fail-closed GoldKey enforcement runtime and config-driven adapters for MCP, AgentCash, HTTPS, and exact Base transactions.",

@@ -118,7 +118,7 @@ private key. The proof is cleared after a fully successful execution.
 
 ## Config-driven launchers
 
-Version 0.2.0 includes four executable entry points. Each uses one
+Version 0.2.1 includes four executable entry points. Each uses one
 operator-owned configuration document containing the shared `runtime` section
 plus the relevant adapter section:
 
@@ -173,19 +173,49 @@ commands, run the enforcer under a separate OS account or container.
 ## Integrity-pinned package artifact
 
 Run `npm run pack:integrity` in this directory to create
-`dist/goldkey-enforcer-0.2.0.tgz` and its adjacent
+`dist/goldkey-enforcer-0.2.1.tgz` and its adjacent
 `.tgz.integrity.json` manifest. The manifest records both a SHA-256 digest and
 an npm-compatible SHA-512 SRI value. Verify one of those values before
 installing the tarball; dependencies are exact-version pinned in
 `npm-shrinkwrap.json`. The package remains marked private so this command cannot
 publish it to a registry.
 
-The permanent manifest is
-`https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json`.
+The versioned GitHub release manifest is
+`https://github.com/noah-ing/goldkey/releases/download/v0.2.1/goldkey-enforcer-0.2.1.tgz.integrity.json`.
 Download the tarball named by that manifest, verify its byte length and SHA-256
 or SHA-512 SRI locally, then install that exact local file. Never pipe the
 download into a shell and never install an unverified similarly named package
 from a registry.
+
+The release manifest is the source of truth for the exact byte length and
+digests. One explicit download, verification, and local-install sequence is:
+
+```sh
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output /absolute/private/goldkey-enforcer-0.2.1.tgz.integrity.json \
+  https://github.com/noah-ing/goldkey/releases/download/v0.2.1/goldkey-enforcer-0.2.1.tgz.integrity.json
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output /absolute/private/goldkey-enforcer-0.2.1.tgz \
+  https://github.com/noah-ing/goldkey/releases/download/v0.2.1/goldkey-enforcer-0.2.1.tgz
+node --input-type=module - \
+  /absolute/private/goldkey-enforcer-0.2.1.tgz.integrity.json \
+  /absolute/private/goldkey-enforcer-0.2.1.tgz <<'NODE'
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+
+const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
+const artifact = await readFile(process.argv[3]);
+const sha256 = createHash("sha256").update(artifact).digest("hex");
+if (manifest.filename !== "goldkey-enforcer-0.2.1.tgz" ||
+    manifest.version !== "0.2.1" ||
+    manifest.size !== artifact.byteLength ||
+    manifest.sha256 !== sha256) {
+  throw new Error("GoldKey enforcer integrity verification failed");
+}
+console.log(`verified ${manifest.filename}: ${sha256}`);
+NODE
+npm install --ignore-scripts /absolute/private/goldkey-enforcer-0.2.1.tgz
+```
 
 ## Receipt-key rotation
 

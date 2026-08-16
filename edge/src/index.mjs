@@ -19,6 +19,8 @@ const DISTRIBUTION_ASSETS = new Map([
   ["/.well-known/goldkey-guard/goldkey-enforcer-0.1.0.tgz.integrity.json", "application/json; charset=utf-8"],
   ["/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz", "application/gzip"],
   ["/.well-known/goldkey-guard/goldkey-enforcer-0.2.0.tgz.integrity.json", "application/json; charset=utf-8"],
+  ["/.well-known/goldkey-guard/goldkey-enforcer-0.2.1.tgz", "application/gzip"],
+  ["/.well-known/goldkey-guard/goldkey-enforcer-0.2.1.tgz.integrity.json", "application/json; charset=utf-8"],
 ]);
 
 function json(value, status = 200, headers = {}) {

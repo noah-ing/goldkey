@@ -24,6 +24,8 @@ See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria, exclu
 
 GoldKey's four live x402 resources are independently indexed on [x402scan](https://www.x402scan.com/server/8447beac-d24b-434a-bd01-5abfdab53f84), including the Action Gate, Agent Utilities, Network Authorization, and EVM Authorization endpoints.
 
+The locally tested Guard enforcer is available as an integrity-pinned [v0.2.1 beta prerelease](https://github.com/noah-ing/goldkey/releases/tag/v0.2.1). Verify the attached manifest before installing the local tarball. This beta is not independently audited or certified.
+
 ## What is included
 
 - Fixed 50-USDC, 10,000-supply ERC-721 contract

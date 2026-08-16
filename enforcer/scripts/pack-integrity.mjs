@@ -34,7 +34,7 @@ const manifest = {
   package: result.name,
   version: result.version,
   filename: result.filename,
-  download_url: `https://goldkey-edge-storefront.noah-ing.workers.dev/.well-known/goldkey-guard/${result.filename}`,
+  download_url: `https://github.com/noah-ing/goldkey/releases/download/v${result.version}/${result.filename}`,
   node_engine: ">=22",
   size: bytes.byteLength,
   sha256: createHash("sha256").update(bytes).digest("hex"),
