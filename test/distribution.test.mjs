@@ -101,6 +101,7 @@ test("distribution skill uses portable paths and documented single-line metadata
   assert.equal(metadataLines.length, 1);
   const metadata = JSON.parse(metadataLines[0].slice("metadata: ".length));
   assert.deepEqual(metadata.openclaw.requires.bins, ["node"]);
+  assert.equal(metadata.openclaw.homepage, "https://github.com/noah-ing/goldkey");
   assert.equal(metadata.openclaw.envVars.some(({ name }) => name === "GOLDKEY_API_URL"), false);
   assert.match(source, /Node\.js \*\*22 or newer\*\*/);
   assert.ok(source.split("\n").length < 150, "SKILL.md should keep variant details in references");
@@ -120,6 +121,10 @@ test("distribution skill leads with Action Gate and keeps interface metadata ali
   assert.match(source, /`receipt_format`, `request_sha256`, `decision`, `reason_codes`, and `checks`/);
   assert.doesNotMatch(source, /\bsigned receipt\b/i);
   assert.match(source, /Read \[references\/pass-and-keys\.md\]/);
+  assert.match(source, /\*\*\$10,000 guarded integration pilot\*\*/);
+  assert.match(source, /two independently accepted \*\*\$5,000 milestones\*\*/);
+  assert.match(source, /https:\/\/goldkey-edge-storefront\.noah-ing\.workers\.dev\/#pilot-application/);
+  assert.match(source, /not a penetration-test report, certification, production guarantee, or substitute for an independent audit/);
 
   assert.match(metadata, /display_name: "GoldKey Action Gate & Guard Beta"/);
   assert.match(metadata, /short_description: "Preflight and enforce MCP, HTTPS, and Base-wallet actions"/);

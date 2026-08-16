@@ -1,7 +1,7 @@
 ---
 name: goldkey-agent-utilities
 description: Preflight proposed agent actions with GoldKey Action Gate for a deterministic ALLOW, REVIEW, or BLOCK receipt, or integrate the feature-gated GoldKey Guard beta as an operator-controlled enforcement path for actual MCP, HTTPS, AgentCash, or supported Base/EVM calls. Use for x402-paid action screening, policy enforcement before tool calls or wallet transactions, Guard installation and recovery, component JSON, prompt, URL, spend, and Unicode checks, pass-versus-paygo decisions, or GoldKey pass authentication, quota, and scoped child-key operations.
-metadata: {"openclaw":{"requires":{"bins":["node"]},"envVars":[{"name":"GOLDKEY_ACCESS_TOKEN","required":false,"description":"Short-lived owner session or delegated key injected by the agent secret store for authenticated operations."},{"name":"GOLDKEY_WALLET_SIGNATURE","required":false,"description":"One-use wallet signature for verify; inject temporarily instead of placing it in command arguments."},{"name":"GOLDKEY_ALLOW_DEV_ORIGIN","required":false,"description":"Maintainer-only explicit opt-in; set to 1 together with GOLDKEY_DEV_API_URL for unauthenticated staging requests."},{"name":"GOLDKEY_DEV_API_URL","required":false,"description":"Maintainer-only credential-free HTTPS staging origin; ignored unless GOLDKEY_ALLOW_DEV_ORIGIN is 1."}]}}
+metadata: {"openclaw":{"homepage":"https://github.com/noah-ing/goldkey","requires":{"bins":["node"]},"envVars":[{"name":"GOLDKEY_ACCESS_TOKEN","required":false,"description":"Short-lived owner session or delegated key injected by the agent secret store for authenticated operations."},{"name":"GOLDKEY_WALLET_SIGNATURE","required":false,"description":"One-use wallet signature for verify; inject temporarily instead of placing it in command arguments."},{"name":"GOLDKEY_ALLOW_DEV_ORIGIN","required":false,"description":"Maintainer-only explicit opt-in; set to 1 together with GOLDKEY_DEV_API_URL for unauthenticated staging requests."},{"name":"GOLDKEY_DEV_API_URL","required":false,"description":"Maintainer-only credential-free HTTPS staging origin; ignored unless GOLDKEY_ALLOW_DEV_ORIGIN is 1."}]}}
 ---
 
 # GoldKey Action Gate & Guard Beta
@@ -14,6 +14,12 @@ GoldKey has two paid security layers:
 The ClawHub skill is free. A transferable GoldKey utility term costs 50 USDC plus network gas and includes 10,000 Action Gate or component-tool calls for 365 days. It is an API entitlement, not an investment. Never create calls merely to consume quota or manufacture pass demand.
 
 Use Node.js **22 or newer** for the bundled client and the Guard enforcer.
+
+## Guarded integration pilot
+
+Qualified teams can apply for one fixed-scope **$10,000 guarded integration pilot** for a customer-owned staging workflow and one MCP, HTTPS, or supported Base/EVM connector path. Delivery is split into two independently accepted **$5,000 milestones**; no work begins without written authorization and a funded milestone.
+
+Read the [scope, acceptance criteria, exclusions, and terms](https://github.com/noah-ing/goldkey/blob/main/SECURITY_PILOT.md), then use the [private pilot application](https://goldkey-edge-storefront.noah-ing.workers.dev/#pilot-application) for one concrete workflow. The pilot is an integration engagement, not a penetration-test report, certification, production guarantee, or substitute for an independent audit.
 
 ## Verify live state first
 
