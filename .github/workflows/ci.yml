@@ -34,6 +34,11 @@ jobs:
           version: v1.5.1
           cache: false
 
+      - name: Install script runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+
       - name: Install locked dependencies
         run: |
           npm ci

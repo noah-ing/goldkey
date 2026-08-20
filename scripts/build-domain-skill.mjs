@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { deflateRawSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -83,9 +82,50 @@ function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
+function reverseBits(value, width) {
+  let reversed = 0;
+  for (let bit = 0; bit < width; bit += 1) {
+    reversed = (reversed << 1) | ((value >>> bit) & 1);
+  }
+  return reversed;
+}
+
+function fixedLiteralCode(symbol) {
+  if (symbol <= 143) return [0x30 + symbol, 8];
+  if (symbol <= 255) return [0x190 + symbol - 144, 9];
+  if (symbol <= 279) return [symbol - 256, 7];
+  return [0xc0 + symbol - 280, 8];
+}
+
+function deterministicDeflate(bytes) {
+  const output = [];
+  let pending = 0;
+  let pendingBits = 0;
+
+  const writeBits = (value, width) => {
+    pending |= value << pendingBits;
+    pendingBits += width;
+    while (pendingBits >= 8) {
+      output.push(pending & 0xff);
+      pending >>>= 8;
+      pendingBits -= 8;
+    }
+  };
+
+  writeBits(0b011, 3); // final block using the fixed Huffman table
+  for (const byte of bytes) {
+    const [code, width] = fixedLiteralCode(byte);
+    writeBits(reverseBits(code, width), width);
+  }
+  const [endCode, endWidth] = fixedLiteralCode(256);
+  writeBits(reverseBits(endCode, endWidth), endWidth);
+  if (pendingBits > 0) output.push(pending & 0xff);
+  return Buffer.from(output);
+}
+
 function deterministicGzip(bytes) {
-  const header = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff]);
-  const compressed = deflateRawSync(bytes, { level: 9 });
+  const header = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff]);
+  const compressed = deterministicDeflate(bytes);
   const trailer = Buffer.alloc(8);
   trailer.writeUInt32LE(crc32(bytes), 0);
   trailer.writeUInt32LE(bytes.length >>> 0, 4);
