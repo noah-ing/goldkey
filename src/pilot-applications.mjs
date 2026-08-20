@@ -105,7 +105,7 @@ function pageLimit(value) {
 function normalizePublicBody(body) {
   exactObject(body, PUBLIC_FIELDS, "invalid_pilot_application", "Pilot application");
   if (body.budget_confirmed !== true) {
-    throw new ServiceError(400, "pilot_budget_not_confirmed", "The $1,000 implementation pilot budget must be confirmed");
+    throw new ServiceError(400, "pilot_budget_not_confirmed", "The selected engagement budget must be confirmed");
   }
   return {
     name: text(body.name, "name", { minimum: 2, maximum: 100 }),

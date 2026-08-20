@@ -1,6 +1,107 @@
-# GoldKey
+# GoldKey Guard
 
-GoldKey is a fixed-price, transferable NFT access pass sold directly to autonomous agents.
+GoldKey Guard is an execution-path authorization layer for AI agents. An
+operator-controlled local enforcer holds the protected MCP or HTTPS credential,
+transport, or signer for supported Base/EVM actions. It forwards a proposed
+call only after verifying a short-lived signed `ALLOW` receipt bound to the
+exact call, installation, and active operator policy.
+
+## Security boundary
+
+Guard is an enforcement boundary only when the agent cannot bypass the local
+enforcer to reach the protected capability directly. The hosted authorizer
+receives the canonical proposed call, public installation identity and
+signature, and any authorization-payment evidence. It does not receive the
+protected upstream credential or execution signer, and it never invokes,
+signs, broadcasts, or forwards the protected action.
+
+The fail-closed sequence is:
+
+1. The operator defines an immutable policy and fixed connector allowlist
+   outside the agent's control.
+2. The local installation canonicalizes and signs the exact proposed call and
+   durable idempotency key.
+3. The hosted authorizer returns a signed `ALLOW`, `REVIEW`, or `BLOCK` decision
+   bound to the call, installation, policy, and expiry window.
+4. The local enforcer verifies that binding and invokes its operator-bound
+   connector only for a fresh `ALLOW`. `REVIEW` and `BLOCK` never forward.
+5. A timeout or crash after forwarding becomes `outcome_unknown`; the enforcer
+   does not automatically replay an irreversible action.
+
+The threat model is a compromised or misdirected agent proposing an
+unauthorized, altered, over-budget, or replayed action. Guard cannot enforce a
+capability that remains reachable through another credential, signer, network
+route, or process. Its receipts attest GoldKey's observations and authorization
+decision; they do not prove universal safety or an upstream outcome that
+GoldKey did not independently observe. See
+[GUARD_PRODUCT.md](GUARD_PRODUCT.md) for supported operations, trust
+assumptions, adapter limits, DNS and spend controls, and recovery boundaries.
+
+## Beta status and evidence
+
+- Guard is a feature-gated design-partner beta. Registration requires an
+  exactly allowlisted operator wallet, and the hosted routes are disabled by
+  default until their payment, signing, and allowlist configuration is valid.
+- The local enforcer is available as the integrity-pinned
+  [v0.2.1 beta prerelease](https://github.com/noah-ing/goldkey/releases/tag/v0.2.1).
+  Verify the attached manifest before installing the tarball.
+- The repository includes service, enforcer, and contract tests for policy and
+  schema drift, exact-call and receipt binding, replay and idempotency,
+  concurrent spend reservations, destination controls, lifecycle failures,
+  and supported EVM constraints.
+- This beta is not independently audited or certified. It is not a compliance
+  certification, blanket penetration test, production guarantee, or claim
+  that every vulnerability will be found or prevented.
+
+### Verify locally
+
+Requires Node.js 22 or newer and Foundry:
+
+```sh
+npm ci
+npm --prefix enforcer ci
+npm run check
+```
+
+The two clean installs use the root lockfile and the enforcer's separately
+pinned dependency manifest. `npm run check` runs the service/API,
+local-enforcer, and Solidity contract test suites. `npm run demo` separately
+exercises deterministic quote logic and the prompt scanner without submitting
+a transaction.
+
+Implementation and operating details:
+
+- [Local enforcer security boundary and installation](enforcer/README.md)
+- [Guard product model and non-negotiable security properties](GUARD_PRODUCT.md)
+- [Testnet, mainnet, and acceptance runbook](DEPLOYMENT.md)
+- [Guarded staging pilot scope and exclusions](SECURITY_PILOT.md)
+- [Private vulnerability reporting and supported versions](SECURITY.md)
+
+## Guarded integration pilot
+
+GoldKey offers a fixed-fee **$10,000 guarded integration pilot** for teams
+preparing to let one AI-agent workflow call a privileged MCP tool, HTTPS
+operation, or supported Base/EVM wallet action. The engagement is delivered in
+two independently accepted $5,000 milestones and is limited to a customer-owned
+staging environment, one workflow, and one connector path.
+
+The pilot includes a threat model, immutable operator policy, a
+customer-controlled local enforcement path, adversarial
+allow/deny/replay/drift tests, an evidence package, and an operational handoff.
+A smaller $1,000 control-design sprint is available when the integration
+boundary is not yet ready to implement.
+
+See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria,
+exclusions, and commercial terms, then use the
+[private pilot application](https://goldkey-edge-storefront.noah-ing.workers.dev/#pilot-application)
+to describe one concrete workflow and connector. No work begins without
+written authorization and a funded milestone.
+
+## Commerce and deterministic utilities
+
+Separate from Guard, GoldKey includes an optional fixed-price, transferable
+ERC-721 access pass and x402 paygo layer for deterministic agent utilities. The
+pass is an API entitlement, not an investment.
 
 - Primary price: **50 USDC**
 - Hard primary supply cap: **10,000**
@@ -10,23 +111,18 @@ GoldKey is a fixed-price, transferable NFT access pass sold directly to autonomo
 - Public alternative: **0.01 USDC per call** through x402
 - Mechanical break-even: **5,000 calls per key**, before gas and switching cost
 
-The NFT is not sold on a speculative story. It is the transferable settlement object for a cost-saving API entitlement. At 10,000 calls, paygo costs 100 USDC and GoldKey costs 50 USDC. High-volume orchestrators can issue revocable child-agent keys so an entire swarm draws from one quota.
+At 10,000 calls, paygo costs 100 USDC and the pass costs 50 USDC before gas,
+switching cost, and risk reserve. High-volume orchestrators can issue revocable
+child-agent keys so multiple workers draw from one quota. The 500,000-USDC
+figure is the maximum gross from first mints, not a sales forecast or a cap on
+renewal and paygo revenue.
 
-The 500,000-USDC figure is the maximum gross from first mints, not a sales forecast and not a cap on total revenue. Renewal and paygo revenue are separate and are not supply-capped. The commercial bottleneck is distribution to agents that genuinely exceed 5,000 eligible calls per term.
+GoldKey's four live x402 resources are independently indexed on
+[x402scan](https://www.x402scan.com/server/8447beac-d24b-434a-bd01-5abfdab53f84),
+including the Action Gate, Agent Utilities, Network Authorization, and EVM
+Authorization endpoints.
 
-## Paid security integration
-
-GoldKey also offers a fixed-fee **$10,000 guarded integration pilot** for teams preparing to let one AI-agent workflow call a privileged MCP tool, HTTPS operation, or supported Base/EVM wallet action. The engagement is delivered in two independently accepted $5,000 milestones and is limited to a customer-owned staging environment, one workflow, and one connector path.
-
-The pilot includes a threat model, immutable operator policy, a customer-controlled local enforcement path, adversarial allow/deny/replay/drift tests, an evidence package, and an operational handoff. A smaller $1,000 control-design sprint is available when the integration boundary is not yet ready to implement.
-
-See [SECURITY_PILOT.md](SECURITY_PILOT.md) for scope, acceptance criteria, exclusions, and commercial terms, then use the [private pilot application](https://goldkey-edge-storefront.noah-ing.workers.dev/#pilot-application) to describe one concrete workflow and connector. No work begins without written authorization and a funded milestone.
-
-GoldKey's four live x402 resources are independently indexed on [x402scan](https://www.x402scan.com/server/8447beac-d24b-434a-bd01-5abfdab53f84), including the Action Gate, Agent Utilities, Network Authorization, and EVM Authorization endpoints.
-
-The locally tested Guard enforcer is available as an integrity-pinned [v0.2.1 beta prerelease](https://github.com/noah-ing/goldkey/releases/tag/v0.2.1). Verify the attached manifest before installing the local tarball. This beta is not independently audited or certified.
-
-## What is included
+### Included commerce and access controls
 
 - Fixed 50-USDC, 10,000-supply ERC-721 contract
 - Onchain term number, expiration, renewal, immutable price/cap/terms hash
@@ -56,21 +152,11 @@ The locally tested Guard enforcer is available as an integrity-pinned [v0.2.1 be
 
 Every successful NFT-gated tool result costs one quota unit. Exact NFT-gated idempotent retries are replayed without a second debit. Each paygo request is a separate 0.01-USDC x402 purchase. The service checks the tool name and request shape before payment verification; after verification it fully validates and executes the tool, buffers the result, settles payment, and releases the result only after successful settlement. A tool error cancels settlement. Paygo does not use the NFT idempotency ledger, so retrying a successfully settled paygo call is another purchase.
 
-## Run it
+## Run the local service
 
-Requires Node 22 or newer and Foundry for contract tests.
-
-```sh
-npm install
-npm run check
-npm run demo
-```
-
-`pg` was added while this workspace had no registry access. The first connected
-`npm install` refreshes `package-lock.json`; commit that refreshed lock, then use
-`npm ci` for reproducible builds.
-
-Copy `.env.example` to `.env`, set the RPC and deployed addresses, then:
+After the verified install and test sequence above, `npm run demo` runs the
+offline quote-and-utility example. To start the API locally, copy `.env.example`
+to `.env` and set the RPC and deployed addresses:
 
 ```sh
 npm start
@@ -157,8 +243,8 @@ Each input line is a quote request; each output line is a strict JSON commerce r
 `distribution/goldkey-agent-utilities/` is a ClawHub-ready OpenClaw skill with a
 no-dependency Node client for discovery, live quotes, authentication, quota, and
 pass-gated tool calls. Its client pins the verified Base-mainnet Worker,
-contract, canonical USDC, and frozen terms hash. Confirm no release placeholders
-remain and run its `self-test` before publishing an update.
+contract, canonical USDC, and frozen terms hash. Before publishing an update,
+run its `self-test` and compare every pinned value with live discovery.
 
 Publish the free integration under the `integrations`, `security`, and `finance`
 categories. The external service remains paid at the posted prices; ClawHub is
@@ -214,3 +300,15 @@ See `TERMS.md` for the exact hashed entitlement, `ZERO_CASH_LAUNCH.md` for the
 capital-free route, `DEPLOYMENT.md` for the complete testnet/mainnet runbook,
 `edge/README.md` for the always-on storefront, and `CREATE2_DEPLOYMENT.md` for
 the offline sponsored-deployment manifest builder.
+
+## License
+
+Unless a file states otherwise, this repository is distributed under the
+[ISC License](LICENSE). The enforcer carries the same ISC text in
+[enforcer/LICENSE](enforcer/LICENSE).
+
+The Solidity contract and its Solidity test declare
+`SPDX-License-Identifier: MIT` and are distributed under the
+[MIT License](LICENSE-MIT): `contracts/src/GoldKey.sol` and
+`contracts/test/GoldKey.t.sol`. Third-party dependencies and generated
+dependency metadata retain their own license terms.
