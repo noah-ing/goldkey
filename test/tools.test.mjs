@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { executeTool } from "../src/tools.mjs";
 
+test("tool dispatch rejects inherited Object prototype names", () => {
+  for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__defineGetter__", "__proto__"]) {
+    assert.throws(
+      () => executeTool(name, {}),
+      (error) => error.status === 404 && error.code === "unknown_tool",
+      name,
+    );
+  }
+});
+
 test("canonicalization is stable across object key order", () => {
   const left = executeTool("json.canonicalize", { value: { z: 1, a: [true, null] } });
   const right = executeTool("json.canonicalize", { value: { a: [true, null], z: 1 } });

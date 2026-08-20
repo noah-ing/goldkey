@@ -210,7 +210,11 @@ test("root storefront serves the honest Guard founding offer for exact GET and H
   assert.match(html, /No payment is due with this application/);
   assert.match(html, /not posted publicly/);
   assert.doesNotMatch(html, /email notification|we(?:'|’)ll notify/i);
-  const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const scriptStart = html.indexOf("<script>");
+  const scriptEnd = html.indexOf("</script>", scriptStart);
+  const inlineScript = scriptStart === -1 || scriptEnd === -1
+    ? undefined
+    : html.slice(scriptStart + "<script>".length, scriptEnd);
   assert.ok(inlineScript);
   const scriptHash = createHash("sha256").update(inlineScript).digest("base64");
   assert.ok(contentSecurityPolicy.includes(`script-src 'sha256-${scriptHash}'`));

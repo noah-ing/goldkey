@@ -662,8 +662,9 @@ const implementations = {
 };
 
 export function executeTool(name, input) {
+  if (!Object.hasOwn(implementations, name)) throw new ServiceError(404, "unknown_tool", `Unknown GoldKey tool: ${name}`);
   const implementation = implementations[name];
-  if (!implementation) throw new ServiceError(404, "unknown_tool", `Unknown GoldKey tool: ${name}`);
+  if (typeof implementation !== "function") throw new ServiceError(404, "unknown_tool", `Unknown GoldKey tool: ${name}`);
   const result = implementation(input);
   const inputHash = toolInputHash(name, input);
   return { tool: name, tool_version: VERSION, input_sha256: inputHash, result };
